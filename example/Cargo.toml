@@ -1,0 +1,15 @@
+[package]
+name = "example"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bevy = { workspace = true }
+bevy_replicon = { workspace = true }
+bevy_replicon_renet = { workspace = true }
+bevy_replicon_lockstep = { workspace = true }
+dotenv = "0.15.0"
+
+[[bin]]
+name = "example"
+path = "main.rs"
