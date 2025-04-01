@@ -1,14 +1,12 @@
 use bevy::{prelude::*, render::{settings::{Backends, WgpuSettings}, RenderPlugin}};
-use bevy_replicon::{prelude::*, shared::backend::connected_client::NetworkId};
+use bevy_replicon::prelude::*;
 use bevy_replicon_lockstep::prelude::*;
 use bevy_replicon_renet::RepliconRenetPlugins;
 use std::{env, time::Duration};
-use dotenv::dotenv;
 
 mod connection;
 
 fn main() {
-    dotenv().ok();
     let mut app = App::new();
     app.add_plugins((
         DefaultPlugins
@@ -33,6 +31,10 @@ fn main() {
                 tick_timestep: Duration::from_millis(33),
                 num_players: 2,
                 ..default()
+            },
+            server: ServerSettings {
+                server_mode: ServerMode::Host,
+                ..default()
             }
         }
     ));
@@ -43,13 +45,21 @@ fn main() {
 
     // Run `cargo run server` to start a host server
     if env::args().collect::<Vec<String>>().iter().any(|arg| {arg == "server"}) {
-        app.add_systems(Startup, |mut commands: Commands|{
-            commands.trigger(connection::TriggerStartServer)
-        });
+        app.add_systems(Startup, |
+            mut commands: Commands,
+            mut state: ResMut<NextState<SimulationState>>
+            | {
+                commands.trigger(connection::TriggerStartServer);
+                state.set(SimulationState::Connecting);
+            });
     } else { // else it's a client
-        app.add_systems(Startup, |mut commands: Commands| {
-            commands.trigger(connection::TriggerConnectClient)
-        });
+        app.add_systems(Startup, |
+                mut commands: Commands,
+                mut state: ResMut<NextState<SimulationState>>
+            | {
+                commands.trigger(connection::TriggerConnectClient);
+                state.set(SimulationState::Connecting);
+            });
     }
 
     app.add_systems(Update,
@@ -74,7 +84,6 @@ fn test(
     mut commands: Commands,
     kb: Res<ButtonInput<KeyCode>>,
     sim_tick: Query<&SimulationTick>,
-    _ids: Query<&NetworkId, With<Replicated>>,
     cmd_types: Res<CommandTypeRegistry>,
 ) {
     let Ok(tick) = sim_tick.get_single() else { return };

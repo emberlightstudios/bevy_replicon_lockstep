@@ -144,9 +144,10 @@ fn tick(
 
     if let Some(clients_for_tick) = commands_received.get(&tick_to_check) {
         if clients_for_tick.iter().len() == clients.iter().len() {
-            //println!("ticking");
+            //println!("YESSSSSSSS");
             sim_tick.single_mut().0 += 1;
         } else {
+            //println!("NOOOOOOOOOO");
             *disconnect_timer += 1;
             if *disconnect_timer > settings.disconnect_tick_threshold {
                 *disconnect_timer = 0;

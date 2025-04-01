@@ -1,10 +1,7 @@
 use bevy::{prelude::*, utils::hashbrown::{HashMap, HashSet}};
 use bevy_replicon::{prelude::*, shared::backend::connected_client::NetworkId};
 use serde::{Deserialize, Serialize};
-use crate::{
-    prelude::*,
-    simulation::SetSimulationState
-};
+use crate::prelude::*;
 
 pub(crate) struct LockstepCommandsPlugin;
 
@@ -15,9 +12,9 @@ impl Plugin for LockstepCommandsPlugin {
             .init_resource::<LockstepGameCommandsReceived>()
             .add_client_trigger::<ClientSendCommands>(Channel::Ordered)
             .add_server_trigger::<ServerSendCommands>(Channel::Ordered)
-            .add_observer(send_initial_commands_to_server)
             .add_observer(receive_commands_server)
             .add_observer(receive_commands_client)
+            .add_systems(OnEnter(SimulationState::Running), send_initial_commands_to_server)
             .add_systems(FixedPostUpdate,
                 send_empty_commands_to_server_on_tick
                     .before(ClientSet::Send)
@@ -125,16 +122,13 @@ struct ServerSendCommands {
 }
 
 /// The server ticks only if it gets commands from all clients,
-/// but by default clients only send (empty) commands when the server ticks.
+/// but by default clients only send commands when the server ticks.
 /// This system sends an initial empty command queue on tick 0
 /// just to get the party started
 fn send_initial_commands_to_server(
-    trigger: Trigger<SetSimulationState>,
     mut commands: Commands,
 ) {
-    if **trigger == SimulationState::Running {
-        commands.client_trigger(ClientSendCommands::default());
-    }
+    commands.client_trigger(ClientSendCommands::default());
 }
 
 /// Commands won't be sent for every player on every tick.

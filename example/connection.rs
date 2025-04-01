@@ -7,7 +7,7 @@ use bevy_replicon_renet::{
 };
 use bevy_replicon_lockstep::prelude::*;
 use std::{
-   env, error::Error, net::{Ipv4Addr, SocketAddr, UdpSocket}, time::SystemTime
+   error::Error, net::{Ipv4Addr, SocketAddr, UdpSocket}, time::SystemTime
 };
 
 
@@ -23,14 +23,10 @@ pub(crate) fn start_server (
     channels: Res<RepliconChannels>,
     mut commands: Commands,
     settings: Res<SimulationSettings>,
-    //mut id_map: ResMut<NetworkIdMap>,
+    server_settings: Res<ServerSettings>,
 ) -> Result<(), Box<dyn Error>> {
     let server_channels_config = channels.server_configs();
     let client_channels_config = channels.client_configs();
-    let port: u16 = env::var("SERVER_PORT")
-                    .expect("SERVER_PORT env var not set")
-                    .parse()
-                    .expect("Failed to parse SERVER_PORT env var");
 
     let server = RenetServer::new(ConnectionConfig {
       server_channels_config,
@@ -39,7 +35,7 @@ pub(crate) fn start_server (
     });
 
     let current_time = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?;
-    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port))
+    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, server_settings.port))
       .map_err(|_| "Failed to bind socket on server")?;
     let server_config = ServerConfig {
       current_time,
@@ -52,21 +48,6 @@ pub(crate) fn start_server (
 
     commands.insert_resource(server);
     commands.insert_resource(transport);
-
-    // Local client entity for listen server
-    // Remote clients will be sent this information automatically
-    // but for a host/client we must set it manually 
-    let _host_entity = commands.spawn((
-        LocalClient,
-        NetworkId::new(1),
-    )).id();
-
-    // Cannot add to NetworkIdMap unfortunately
-    //*id_map.insert(NetworkId::new(1), host_entity);
-
-    // This step is important.  It tells the server to tell the clients to get 
-    // load assets and get ready to play
-    commands.set_state(SimulationState::Connecting);
     Ok(())
 }
   
@@ -86,15 +67,10 @@ pub(crate) fn connect_client(
     _: Trigger<TriggerConnectClient>,
     mut commands: Commands,
     channels: Res<RepliconChannels>,
+    server_settings: Res<ServerSettings>,
 ) -> Result<(), Box<dyn Error>> {
-    let ip: Ipv4Addr = env::var("SERVER_IP")
-        .map_err(|_| "Failed to find SERVER_IP env var")?
-        .parse::<Ipv4Addr>()
-        .map_err(|_| "Failed to parse SERVER_IP env var")?;
-    let port: u16 = env::var("SERVER_PORT")
-        .map_err(|_| "Failed to find SERVER_PORT env var")?
-        .parse()
-        .map_err(|_| "Failed to parse SERVER_PORT env var")?;
+    let ip: Ipv4Addr = server_settings.address;
+    let port: u16 = server_settings.port;
     info!("connecting to {ip}:{port}");
     let server_channels_config = channels.server_configs();
     let client_channels_config = channels.client_configs();

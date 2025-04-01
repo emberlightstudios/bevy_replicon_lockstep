@@ -1,3 +1,5 @@
+use std::net::Ipv4Addr;
+
 use bevy::prelude::*;
 use bevy_replicon::{prelude::*, shared::backend::connected_client::NetworkId};
 use serde::{Deserialize, Serialize};
@@ -13,11 +15,10 @@ impl Plugin for LockstepConnectionsPlugin {
         app
             .replicate::<NetworkId>()
             .replicate::<ClientReady>()
-            .add_observer(replicate_network_ids)
-            .add_observer(on_client_connected)
+            .add_observer(on_client_connect)
+            .add_observer(on_client_requested_id)
+            .add_observer(on_received_local_client_id)
             .add_observer(on_client_ready)
-            .add_observer(request_local_client_id)
-            .add_observer(receive_local_client_id)
             .add_client_trigger::<ClientReadyEvent>(Channel::Unordered)
             .add_client_trigger::<LocalClientIdRequestEvent>(Channel::Unordered)
             .add_server_trigger::<LocalClientIdResponseEvent>(Channel::Unordered)
@@ -28,13 +29,37 @@ impl Plugin for LockstepConnectionsPlugin {
     }
 }
 
+#[derive(Default, Clone, PartialEq)]
+pub enum ServerMode {
+    #[default]
+    Host,
+    Dedicated,
+}
+
+#[derive(Resource, Clone)]
+pub struct ServerSettings {
+    pub server_mode: ServerMode,
+    pub address: Ipv4Addr,
+    pub port: u16,
+}
+
+impl Default for ServerSettings {
+    fn default() -> Self {
+        Self {
+            server_mode: ServerMode::Host,
+            address: Ipv4Addr::LOCALHOST,
+            port: 15342,
+        }
+    }
+}
+
 /// A trigger for the client to request the local client id from the server 
 #[derive(Event, Serialize, Deserialize)]
 struct LocalClientIdRequestEvent;
 
 /// A trigger for the server to send the local client id to a connected client
 #[derive(Event, Serialize, Deserialize, Deref)]
-struct LocalClientIdResponseEvent(ClientId);
+struct LocalClientIdResponseEvent(NetworkId);
 
 /// Marker Component to identify the local client entity
 #[derive(Component)]
@@ -48,34 +73,80 @@ pub struct ClientReady;
 #[derive(Event, Serialize, Deserialize)]
 pub struct ClientReadyEvent;
 
-fn replicate_network_ids(
+fn on_client_connect(
     trigger: Trigger<OnAdd, NetworkId>,
+    ids: Query<&NetworkId>,
+    local_client: Query<&LocalClient>,
+    server: Res<RepliconServer>,
+    server_settings: Res<ServerSettings>,
+    simulation_settings: Res<SimulationSettings>,
     mut commands: Commands,
-) {
-    commands.entity(trigger.entity()).insert(Replicated);
+) { 
+    // If all players are connected begin the setup process.
+    // You can hook into the Setup state to run systems to prepare
+    // the game world before the game starts.  Send ClientReadyEvent
+    // trigger when client setup is finished.
+    if ids.iter().len() == simulation_settings.num_players as usize {
+        commands.server_trigger(ToClients {
+            mode: SendMode::Broadcast,
+            event: SetSimulationState(SimulationState::Setup),
+        });
+    }
+
+    // Host entity/id(1) will be spawned below when first client connects. 
+    // We don't want to re-trigger the rest of this system when that happens
+    if ids.get(trigger.entity()).unwrap().get() == 1 { return }
+
+    if server.is_running() {
+        // Replicate all remote client NetworkIds 
+        commands.entity(trigger.entity()).insert(Replicated);
+
+        if server_settings.server_mode == ServerMode::Host {
+            // If no host entity exists yet (1st connection), create one
+            if local_client.get_single().is_err() {
+                commands.spawn((
+                    NetworkId::new(1),
+                    LocalClient,
+                    Replicated,
+                ));
+            }
+        }
+    } else {
+        // If we are a remote client and we don't know our local
+        // client id, request it from the server, so we can apply the
+        // LocalClient marker component.
+        if local_client.is_empty() {
+            commands.client_trigger(LocalClientIdRequestEvent);
+        }
+    }
 }
 
-fn on_client_connected (
+fn on_client_requested_id (
     trigger: Trigger<FromClient<LocalClientIdRequestEvent>>,
     network_ids: Query<(Entity, &NetworkId)>,
-    settings: Res<SimulationSettings>,
     mut commands: Commands,
 ) {
     let Ok((client, client_id)) = network_ids.get(trigger.client_entity)
         else { panic!("Failed to find client entity on new connection") };
-    if client_id.get() != 1 {
-        info!("Sending local client id to {:?}", client_id.get());
-        commands.server_trigger(ToClients {
-            mode: SendMode::Direct(client),
-            event: LocalClientIdResponseEvent(client_id.get()),
-        });
-        if network_ids.iter().len() == settings.num_players as usize {
-            commands.server_trigger(ToClients {
-                mode: SendMode::Broadcast,
-                event: SetSimulationState(SimulationState::Setup),
-            });
+    commands.server_trigger(ToClients {
+        mode: SendMode::Direct(client),
+        event: LocalClientIdResponseEvent(*client_id),
+    });
+}
+
+fn on_received_local_client_id(
+    local_client: Trigger<LocalClientIdResponseEvent>,
+    mut commands: Commands,
+    network_ids: Query<(Entity, &NetworkId)>,
+) {
+    let local_client_id = **local_client;
+    for (client, id) in network_ids.iter() {
+        if *id == local_client_id {
+            commands.entity(client).insert(LocalClient);
+            return;
         }
     }
+    panic!("failed to match local client");
 }
 
 fn on_client_ready (
@@ -83,47 +154,14 @@ fn on_client_ready (
     host: Query<Entity, With<LocalClient>>,
     mut commands: Commands,
 ) {
-    info!("Received client ready trigger");
     if ready.client_entity == Entity::PLACEHOLDER {
-        // Make sure we aren't a dedicated server
-        // We must have a host client entity defined
-        if let Ok(host_client) = host.get_single() {
-            commands.entity(host_client).insert(ClientReady);
+        // This is the host server triggering the event
+        if let Ok(host_entity) = host.get_single() {
+            commands.entity(host_entity).insert(ClientReady);
         }
     } else {
         commands.entity(ready.client_entity).insert(ClientReady);
     }
-}
-
-fn request_local_client_id(
-    trigger: Trigger<OnAdd, NetworkId>,
-    ids: Query<&NetworkId>,
-    local_client: Query<&LocalClient>,
-    mut commands: Commands,
-) { 
-    // currently this will make multiple requests, one for each connected client
-    // until the response comes in.  not ideal but not a huge deal either
-    if !local_client.is_empty() { return }
-    // Don't trigger if we received the host client entity. 
-    // This will have been set manually on the host
-    if ids.get(trigger.entity()).unwrap().get() == 1 { return }
-    commands.client_trigger(LocalClientIdRequestEvent);
-}
-
-fn receive_local_client_id(
-    connected: Trigger<LocalClientIdResponseEvent>,
-    mut commands: Commands,
-    network_ids: Query<(Entity, &NetworkId)>,
-) {
-    if network_ids.iter().len() == 0 { return }
-    let local_client_id = **connected;
-    for (client, id) in network_ids.iter() {
-        if id.get() == local_client_id {
-            commands.entity(client).insert(LocalClient);
-            return;
-        }
-    }
-    panic!("failed to match local client");
 }
 
 fn check_all_clients_ready(

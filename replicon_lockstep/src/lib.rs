@@ -5,15 +5,10 @@ mod simulation;
 mod connections;
 mod commands;
 
+use commands::LockstepCommandsPlugin;
 use connections::LockstepConnectionsPlugin;
-use simulation::{
-    LockstepSimulationPlugin,
-    SimulationSettings,
-};
-use commands::{
-    CommandTypeRegistry,
-    LockstepCommandsPlugin,
-};
+use simulation::LockstepSimulationPlugin;
+use prelude::*;
 
 pub mod prelude {
     pub use crate::RepliconLockstepPlugin;
@@ -28,6 +23,8 @@ pub mod prelude {
         ClientId,
         ClientReadyEvent,
         ClientReady,
+        ServerMode,
+        ServerSettings,
     };
     pub use crate::commands::{
         ClientSendCommands,
@@ -41,6 +38,7 @@ pub mod prelude {
 #[derive(Default)]
 pub struct RepliconLockstepPlugin {
     pub simulation: SimulationSettings,
+    pub server: ServerSettings,
     pub commands: Vec<String>,
 }
 
@@ -48,6 +46,7 @@ impl Plugin for RepliconLockstepPlugin {
     fn build(&self, app: &mut App) {
         app
             .insert_resource(self.simulation.clone())
+            .insert_resource(self.server.clone())
             .insert_resource(CommandTypeRegistry::new(self.commands.clone()))
             .add_plugins((
                 LockstepConnectionsPlugin,
