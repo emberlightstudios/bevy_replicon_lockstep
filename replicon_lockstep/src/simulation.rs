@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use bevy_replicon::{prelude::*, server::server_tick::ServerTick, shared::backend::connected_client::NetworkId};
+use bevy_replicon::{prelude::*, shared::backend::connected_client::NetworkId};
 use std::time::Duration;
 use serde::{Serialize, Deserialize};
 use crate::{commands::{LockstepGameCommandBuffer, LockstepGameCommandsReceived}, connections::ClientReady, prelude::ClientReadyEvent};
@@ -8,22 +8,31 @@ pub type SimTick = u32;
 
 pub(crate) struct LockstepSimulationPlugin;
 
+#[derive(SystemSet, Debug, Eq, PartialEq, Clone, Hash)]
+pub struct SimulationTickSystemSet;
+
 impl Plugin for LockstepSimulationPlugin {
     fn build(&self, app: &mut App) {
         app
-            .replicate::<SimulationTick>()
             .insert_state(SimulationState::None)
             .add_observer(handle_sim_state_change)
+            .add_server_event::<SimulationTickEvent>(Channel::Ordered)
             .add_server_trigger::<SetSimulationState>(Channel::Ordered)
             .add_client_trigger::<ClientReadyEvent>(Channel::Unordered)
-            .add_systems(FixedPreUpdate,
-                tick
-                    .run_if(server_running)
+            .add_systems(FixedPostUpdate, 
+                tick_server
+                    .run_if(server_running.and(in_state(SimulationState::Running)))
+                    .before(ServerSet::Send)
             )
-            .add_systems(OnEnter(SimulationState::Starting),
+            .add_systems(FixedPreUpdate, 
+                tick_client
+                    .run_if(client_connected.and(in_state(SimulationState::Running)).and(not(server_running)))
+                    .after(ClientSet::Receive)
+                    .in_set(SimulationTickSystemSet)
+            )
+            .add_systems(OnEnter(SimulationState::Starting), 
                 start_simulation
                     .before(ServerSet::Send)
-                    .run_if(server_running)
             );
     }
 }
@@ -92,6 +101,12 @@ pub enum SimulationState {
     Ending,
 }
 
+#[derive(Event, Serialize, Deserialize, Deref)]
+pub struct SimulationTickEvent(SimTick);
+
+#[derive(Resource, Deref, DerefMut, Default)]
+pub struct SimulationTick(SimTick);
+
 /// An event for the server to change the simulation state on the clients
 #[derive(Event, Serialize, Deserialize, Deref)]
 pub struct SetSimulationState(pub SimulationState);
@@ -100,32 +115,32 @@ fn handle_sim_state_change(
     trigger: Trigger<SetSimulationState>,
     mut sim_state: ResMut<NextState<SimulationState>>
 ) {
-    println!("Simulation entering state {:#?}", trigger.0);
+    info!("Simulation entering state {:#?}", trigger.0);
     sim_state.set(trigger.0);
 }
 
-/// The tick of the simulation.  Incremented on server and replicated to clients
-#[derive(Component, Serialize, Deserialize, Deref, Debug)]
-#[require(Replicated)]
-pub struct SimulationTick(SimTick);
+/// Receives simulation tick events from the server
+fn tick_client(
+    mut ticks: EventReader<SimulationTickEvent>,
+    mut sim_tick: ResMut<SimulationTick>,
+) {
+    for tick in ticks.read() {
+        sim_tick.0 = tick.0;
+    }
+}
 
-/// Handles incrementing the simulation tick
-fn tick(
+/// Handles incrementing the simulation tick on the server
+fn tick_server(
     mut disconnect_timer: Local<u8>,
-    mut sim_tick: Query<&mut SimulationTick>,
-    mut server_tick: ResMut<ServerTick>,
     mut next_state: ResMut<NextState<SimulationState>>,
-    commands_received: Res<LockstepGameCommandsReceived>,
-    sim_state: Res<State<SimulationState>>,
+    mut sim_tick: ResMut<SimulationTick>,
+    mut tick_events: EventWriter<ToClients<SimulationTickEvent>>,
     clients: Query<&NetworkId>,
     stats: Query<&NetworkStats>,
+    commands_received: Res<LockstepGameCommandsReceived>,
     settings: Res<SimulationSettings>,
 ) {
-    server_tick.increment();
-    if *sim_state.get() != SimulationState::Running { return }
-
     let mut tick_delay = 0u32;
-
     if stats.iter().len() > 0 {  // True if clients connected
         // Before ticking the sim for connected clients, we need to check
         // client commands to make sure everyone is still connected and sending data. 
@@ -140,21 +155,22 @@ fn tick(
                 .unwrap()
                 .rtt / 2.0).ceil() as u32 + settings.connection_check_tick_delay as u32;
     }
-    let mut tick_to_check = **sim_tick.single();
+    let mut tick_to_check = sim_tick.0;
     if tick_delay < tick_to_check { tick_to_check -= tick_delay }
-    println!("checking inputs for tick {}. tick delay is {}", tick_to_check, tick_delay);
+    //trace!("checking inputs for tick {}. tick delay is {}", tick_to_check, tick_delay);
 
     if let Some(clients_for_tick) = commands_received.get(&tick_to_check) {
         if clients_for_tick.iter().len() == clients.iter().len() {
-            println!("YESSSSSSSS");
-            sim_tick.single_mut().0 += 1;
+            sim_tick.0 += 1;
+            trace!("ticked to {}", sim_tick.0);
             *disconnect_timer = 0;
+            tick_events.send(ToClients { mode: SendMode::Broadcast, event: SimulationTickEvent(sim_tick.0) });
         } else {
-            println!("NOOOOOOOOOO");
+            trace!("tick not ready");
             *disconnect_timer += 1;
             if *disconnect_timer > settings.disconnect_tick_threshold {
                 *disconnect_timer = 0;
-                info!("Simulation paused due to missing client commands. Handle this...");
+                info!("Simulation paused due to missing client commands. ");
                 next_state.set(SimulationState::Paused)
             }
         }
@@ -163,18 +179,21 @@ fn tick(
 
 fn start_simulation(
     mut commands: Commands,
-    mut state: ResMut<NextState<SimulationState>>,
     mut command_buffer: ResMut<LockstepGameCommandBuffer>,
+    mut command_history: ResMut<LockstepGameCommandsReceived>,
     ready: Query<Entity, With<ClientReady>>,
+    server: Res<RepliconServer>,
 ) {
-    commands.spawn(SimulationTick(0));
+    commands.insert_resource(SimulationTick(0));
     command_buffer.clear();
-    commands.server_trigger(ToClients {
-        mode: SendMode::Broadcast,
-        event: SetSimulationState(SimulationState::Running),
-    });
-    state.set(SimulationState::Running);
-    for client in ready.iter() {
-        commands.entity(client).remove::<ClientReady>();
+    if server.is_running() {
+        command_history.clear();
+        commands.server_trigger(ToClients {
+            mode: SendMode::Broadcast,
+            event: SetSimulationState(SimulationState::Running),
+        });
+        for client in ready.iter() {
+            commands.entity(client).remove::<ClientReady>();
+        }
     }
 }

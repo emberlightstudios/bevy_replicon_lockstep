@@ -17,8 +17,11 @@ fn main() {
                 }.into(),
                 ..default()
             }),
+        // Most lockstep communication is message based so we don't need a fast
+        // tick rate.  But we do need repliation to happen periodically to 
+        // handle client connections.
         RepliconPlugins.set(ServerPlugin {
-            tick_policy: TickPolicy::Manual,
+            tick_policy: TickPolicy::MaxTickRate(15),
             ..default()
         }),
         RepliconRenetPlugins,
@@ -67,7 +70,7 @@ fn main() {
     app.add_systems(Update,
         setup_game.run_if(in_state(SimulationState::Setup))
     );
-    app.add_systems(Update, test.run_if(server_or_singleplayer));
+    app.add_systems(Update, test.run_if(in_state(SimulationState::Running)));
     app.run();
 }
 
@@ -91,18 +94,16 @@ fn on_client_disconnect(
 fn on_client_reconnect(
     _trigger: Trigger<ClientReconnect>,
 ) {
-    /// reconnect logic
+    // reconnect logic
     info!("Trying to reconnect to server");
 }
 
 fn test(
     mut commands: Commands,
     kb: Res<ButtonInput<KeyCode>>,
-    sim_tick: Query<&SimulationTick>,
+    sim_tick: Res<SimulationTick>,
     cmd_types: Res<CommandTypeRegistry>,
 ) {
-    return;
-    let Ok(tick) = sim_tick.get_single() else { return };
     if kb.just_pressed(KeyCode::Space) {
         commands.client_trigger(ClientSendCommands {
             commands: Some(vec![
@@ -111,7 +112,7 @@ fn test(
                     ..default()
                 }
             ]),
-            issued_tick: **tick,
+            issued_tick: **sim_tick,
         });
     }
 }

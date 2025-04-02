@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use bevy_replicon::{prelude::*, shared::backend::connected_client::NetworkId};
+use bevy_replicon::prelude::*;
 use bevy_replicon_renet::{
     netcode::{ClientAuthentication, NetcodeClientTransport, NetcodeServerTransport, ServerAuthentication, ServerConfig},
     renet::{ConnectionConfig, RenetClient, RenetServer},

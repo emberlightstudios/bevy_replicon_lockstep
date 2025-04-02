@@ -1,7 +1,7 @@
 use bevy::{prelude::*, utils::hashbrown::{HashMap, HashSet}};
 use bevy_replicon::{prelude::*, shared::backend::connected_client::NetworkId};
 use serde::{Deserialize, Serialize};
-use crate::prelude::*;
+use crate::{prelude::*, simulation::{SimulationTickEvent, SimulationTickSystemSet}};
 
 pub(crate) struct LockstepCommandsPlugin;
 
@@ -17,7 +17,10 @@ impl Plugin for LockstepCommandsPlugin {
             .add_systems(OnEnter(SimulationState::Running), send_initial_commands_to_server)
             .add_systems(FixedPostUpdate,
                 send_empty_commands_to_server_on_tick
+                    .run_if(in_state(SimulationState::Running))
+                    .after(SimulationTickSystemSet)
                     .before(ClientSet::Send)
+
             );
     }
 }
@@ -128,7 +131,7 @@ struct ServerSendCommands {
 fn send_initial_commands_to_server(
     mut commands: Commands,
 ) {
-    println!("Sending intitial commands");
+    trace!("Sending intitial commands");
     commands.client_trigger(ClientSendCommands::default());
 }
 
@@ -136,24 +139,20 @@ fn send_initial_commands_to_server(
 /// At the beginning of each tick send an empty command queue
 /// just to let the server know we are still in the game
 fn send_empty_commands_to_server_on_tick(
-    sim_tick: Query<&SimulationTick>,
-    mut prev_tick: Local<u32>,
+    mut ticks: EventReader<SimulationTickEvent>,
+    mut commands: Commands,
+    sim_tick: Res<SimulationTick>,
     local_client: Query<&LocalClient>,
-    mut commands: Commands
 ) {
     // Dont send commands if in dedicated server mode
     if local_client.get_single().is_err() { return }
 
-    if sim_tick.get_single().is_ok() {
-        let tick = **sim_tick.single();
-        if tick != *prev_tick {
-            *prev_tick = tick;
-            println!("tick changed to {}, sending comamnds", **sim_tick.single());
-            commands.client_trigger(ClientSendCommands {
-                issued_tick: **sim_tick.single(),
-                ..default()
-            });
-        }
+    for _tick in ticks.read() {
+        trace!("tick changed to {}, sending comamnds", **sim_tick);
+        commands.client_trigger(ClientSendCommands {
+            issued_tick: **sim_tick,
+            ..default()
+        });
     }
 }
 
@@ -172,7 +171,7 @@ fn receive_commands_server(
     // Server sent events use Entity::PLACEHOLDER
     // Instead I have set Host to have its own entity which has NetworkId=1
     let client_id = clients.get(trigger.client_entity).map_or(1, |id| id.get());
-    println!("server received commands from client {} for tick {}", client_id, trigger.event().issued_tick);
+    trace!("server received commands from client {} for tick {}", client_id, trigger.event().issued_tick);
 
     let tick = trigger.event().issued_tick;
     history.entry(tick)
@@ -186,7 +185,7 @@ fn receive_commands_server(
         .get(trigger.client_entity)
         .map_or(3, |s| (s.rtt / 2.0).ceil() as SimTick);
     let execution_tick = tick + tick_delay + settings.base_input_tick_delay as SimTick;
-    println!("sending commands for execution tick {} for client {}", execution_tick, client_id);
+    trace!("sending commands for execution tick {} for client {}", execution_tick, client_id);
     commands.server_trigger(ToClients {
         mode: SendMode::Broadcast,
         event: ServerSendCommands {
@@ -202,7 +201,7 @@ fn receive_commands_client(
     trigger: Trigger<ServerSendCommands>,
     mut game_commands: ResMut<LockstepGameCommandBuffer>,
 ) { 
-    //println!("local client received commands for execution tick {} from {}", trigger.execute_tick, trigger.client_id);
+    //trace!("local client received commands for execution tick {} from {}", trigger.execute_tick, trigger.client_id);
     game_commands.0
         .entry(trigger.execute_tick)
         .or_insert(LockstepClientCommands::default())

@@ -16,6 +16,7 @@ pub mod prelude {
         SimulationSettings,
         SimulationState,
         SimulationTick,
+        SimulationTickEvent,
         SimTick,
     };
     pub use crate::connections::{

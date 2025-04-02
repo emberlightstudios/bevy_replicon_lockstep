@@ -92,38 +92,6 @@ struct ClientReconnectTimer {
     time: Stopwatch
 }
 
-/// Check the connection state
-fn handle_local_client_disconnect(
-    mut commands: Commands,
-    mut state: ResMut<NextState<SimulationState>>,
-    current_state: Res<State<SimulationState>>,
-    mut timer: Query<(Entity, &mut ClientReconnectTimer)>,
-    settings: Res<ConnectionSettings>,
-    time: Res<Time<Fixed>>,
-) {
-    match *current_state.get() {
-        SimulationState::Ending | SimulationState::None | SimulationState::Connecting => {
-            return
-        }
-        SimulationState::Reconnecting => {
-            let (entity, mut timer) = timer.single_mut();
-            timer.tick(time.delta());
-            if timer.elapsed() >= settings.reconnect_timer {
-                commands.trigger(ClientDisconnect);
-                state.set(SimulationState::None);
-                commands.entity(entity).despawn();
-                println!("Client disconnected");
-            }
-        }
-        _ => {
-            println!("Disconnected from server.  Attempting to reconnect...");
-            state.set(SimulationState::Reconnecting);
-            commands.trigger(ClientReconnect);
-            commands.spawn(ClientReconnectTimer{ time: Stopwatch::new() });
-        }
-    }
-}
-
 fn on_client_connect(
     trigger: Trigger<OnAdd, NetworkId>,
     ids: Query<&NetworkId>,
@@ -172,14 +140,46 @@ fn on_client_connect(
     }
 }
 
+/// Check the connection state
+fn handle_local_client_disconnect(
+    mut commands: Commands,
+    mut state: ResMut<NextState<SimulationState>>,
+    current_state: Res<State<SimulationState>>,
+    mut timer: Query<(Entity, &mut ClientReconnectTimer)>,
+    settings: Res<ConnectionSettings>,
+    time: Res<Time<Fixed>>,
+) {
+    match *current_state.get() {
+        SimulationState::Ending | SimulationState::None | SimulationState::Connecting => {
+            return
+        }
+        SimulationState::Reconnecting => {
+            let (entity, mut timer) = timer.single_mut();
+            timer.tick(time.delta());
+            if timer.elapsed() >= settings.reconnect_timer {
+                commands.trigger(ClientDisconnect);
+                state.set(SimulationState::None);
+                commands.entity(entity).despawn();
+                info!("Client disconnected");
+            }
+        }
+        _ => {
+            info!("Disconnected from server.  Attempting to reconnect...");
+            state.set(SimulationState::Reconnecting);
+            commands.trigger(ClientReconnect);
+            commands.spawn(ClientReconnectTimer{ time: Stopwatch::new() });
+        }
+    }
+}
+
 fn on_client_requested_id (
     trigger: Trigger<FromClient<LocalClientIdRequestEvent>>,
     network_ids: Query<(Entity, &NetworkId)>,
     mut commands: Commands,
 ) {
-    println!("Client requested id. Sending");
     let Ok((client, client_id)) = network_ids.get(trigger.client_entity)
         else { panic!("Failed to find client entity on new connection") };
+    info!("Client {} requested id. Sending", client_id.get());
     commands.server_trigger(ToClients {
         mode: SendMode::Direct(client),
         event: LocalClientIdResponseEvent(*client_id),
@@ -191,7 +191,7 @@ fn on_received_local_client_id(
     mut commands: Commands,
     network_ids: Query<(Entity, &NetworkId)>,
 ) {
-    println!("Client received id.");
+    info!("Received local client id.");
     let local_client_id = **local_client;
     for (client, id) in network_ids.iter() {
         if *id == local_client_id {
@@ -210,19 +210,24 @@ fn on_client_ready (
     if ready.client_entity == Entity::PLACEHOLDER {
         // This is the host server triggering the event
         if let Ok(host_entity) = host.get_single() {
+            trace!("host is ready");
             commands.entity(host_entity).insert(ClientReady);
         }
     } else {
+        trace!("client {} is ready", ready.client_entity);
         commands.entity(ready.client_entity).insert(ClientReady);
     }
 }
 
 fn check_all_clients_ready(
+    ids: Query<&NetworkId>,
+    settings: Res<SimulationSettings>,
     not_ready: Query<Entity, (With<NetworkId>, Without<ClientReady>)>,
     mut commands: Commands,
 ) {
-    // Need to check for disconnections in the Setup state.  This will miss them.
-    println!("{}", not_ready.iter().len());
+    if ids.iter().len() != settings.num_players as usize {
+        panic!("Player(s) disconnected during setup phase.  Need to handle this.")
+    }
     if not_ready.is_empty() {
         commands.server_trigger(ToClients {
             mode: SendMode::Broadcast,
