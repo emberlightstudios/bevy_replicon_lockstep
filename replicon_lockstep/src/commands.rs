@@ -136,8 +136,8 @@ fn send_initial_commands_to_server(
 }
 
 /// Commands won't be sent for every player on every tick.
-/// At the beginning of each tick send an empty command queue
-/// just to let the server know we are still in the game
+/// Make sure we at least send empty commands on each tick to let
+/// the server know we are still in the game
 fn send_empty_commands_to_server_on_tick(
     mut ticks: EventReader<SimulationTickEvent>,
     mut commands: Commands,
@@ -147,10 +147,10 @@ fn send_empty_commands_to_server_on_tick(
     // Dont send commands if in dedicated server mode
     if local_client.get_single().is_err() { return }
 
-    for _tick in ticks.read() {
+    for tick in ticks.read() {
         trace!("tick changed to {}, sending comamnds", **sim_tick);
         commands.client_trigger(ClientSendCommands {
-            issued_tick: **sim_tick,
+            issued_tick: **tick,
             ..default()
         });
     }

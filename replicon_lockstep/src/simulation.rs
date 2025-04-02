@@ -157,7 +157,6 @@ fn tick_server(
     }
     let mut tick_to_check = sim_tick.0;
     if tick_delay < tick_to_check { tick_to_check -= tick_delay }
-    //trace!("checking inputs for tick {}. tick delay is {}", tick_to_check, tick_delay);
 
     if let Some(clients_for_tick) = commands_received.get(&tick_to_check) {
         if clients_for_tick.iter().len() == clients.iter().len() {
