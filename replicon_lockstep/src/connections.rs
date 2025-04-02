@@ -1,6 +1,5 @@
-use std::net::Ipv4Addr;
-
-use bevy::prelude::*;
+use std::{net::Ipv4Addr, time::Duration};
+use bevy::{prelude::*, time::Stopwatch};
 use bevy_replicon::{prelude::*, shared::backend::connected_client::NetworkId};
 use serde::{Deserialize, Serialize};
 use crate::{prelude::{SimulationSettings, SimulationState}, simulation::SetSimulationState};
@@ -24,7 +23,9 @@ impl Plugin for LockstepConnectionsPlugin {
             .add_server_trigger::<LocalClientIdResponseEvent>(Channel::Unordered)
             .add_systems(FixedPreUpdate, (
                 check_all_clients_ready
-                    .run_if(in_state(SimulationState::Setup).and(server_or_singleplayer)),
+                    .run_if(in_state(SimulationState::Setup).and(server_running)),
+                handle_local_client_disconnect
+                    .run_if(not(server_running).and(not(client_connected)))
             ));
     }
 }
@@ -37,21 +38,33 @@ pub enum ServerMode {
 }
 
 #[derive(Resource, Clone)]
-pub struct ServerSettings {
+pub struct ConnectionSettings {
     pub server_mode: ServerMode,
-    pub address: Ipv4Addr,
-    pub port: u16,
+    pub server_address: Ipv4Addr,
+    pub server_port: u16,
+    pub reconnect_timer: Duration,
 }
 
-impl Default for ServerSettings {
+impl Default for ConnectionSettings {
     fn default() -> Self {
         Self {
             server_mode: ServerMode::Host,
-            address: Ipv4Addr::LOCALHOST,
-            port: 15342,
+            server_address: Ipv4Addr::LOCALHOST,
+            server_port: 15342,
+            reconnect_timer: Duration::from_secs(5),
         }
     }
 }
+
+/// A trigger that fires when the client should try to reconnect
+#[derive(Event)]
+pub struct ClientReconnect;
+
+/// A trigger that fires when the client has disconnected 
+/// If not in the Ending state or the None state it will first try throw a
+/// reconnect event and start a timer.  If the timer runs out this event fires.
+#[derive(Event)]
+pub struct ClientDisconnect;
 
 /// A trigger for the client to request the local client id from the server 
 #[derive(Event, Serialize, Deserialize)]
@@ -73,12 +86,50 @@ pub struct ClientReady;
 #[derive(Event, Serialize, Deserialize)]
 pub struct ClientReadyEvent;
 
+/// Stopwatch for client reconnects
+#[derive(Component, Deref, DerefMut, Default)]
+struct ClientReconnectTimer {
+    time: Stopwatch
+}
+
+/// Check the connection state
+fn handle_local_client_disconnect(
+    mut commands: Commands,
+    mut state: ResMut<NextState<SimulationState>>,
+    current_state: Res<State<SimulationState>>,
+    mut timer: Query<(Entity, &mut ClientReconnectTimer)>,
+    settings: Res<ConnectionSettings>,
+    time: Res<Time<Fixed>>,
+) {
+    match *current_state.get() {
+        SimulationState::Ending | SimulationState::None | SimulationState::Connecting => {
+            return
+        }
+        SimulationState::Reconnecting => {
+            let (entity, mut timer) = timer.single_mut();
+            timer.tick(time.delta());
+            if timer.elapsed() >= settings.reconnect_timer {
+                commands.trigger(ClientDisconnect);
+                state.set(SimulationState::None);
+                commands.entity(entity).despawn();
+                println!("Client disconnected");
+            }
+        }
+        _ => {
+            println!("Disconnected from server.  Attempting to reconnect...");
+            state.set(SimulationState::Reconnecting);
+            commands.trigger(ClientReconnect);
+            commands.spawn(ClientReconnectTimer{ time: Stopwatch::new() });
+        }
+    }
+}
+
 fn on_client_connect(
     trigger: Trigger<OnAdd, NetworkId>,
     ids: Query<&NetworkId>,
     local_client: Query<&LocalClient>,
     server: Res<RepliconServer>,
-    server_settings: Res<ServerSettings>,
+    server_settings: Res<ConnectionSettings>,
     simulation_settings: Res<SimulationSettings>,
     mut commands: Commands,
 ) { 
@@ -126,6 +177,7 @@ fn on_client_requested_id (
     network_ids: Query<(Entity, &NetworkId)>,
     mut commands: Commands,
 ) {
+    println!("Client requested id. Sending");
     let Ok((client, client_id)) = network_ids.get(trigger.client_entity)
         else { panic!("Failed to find client entity on new connection") };
     commands.server_trigger(ToClients {
@@ -139,6 +191,7 @@ fn on_received_local_client_id(
     mut commands: Commands,
     network_ids: Query<(Entity, &NetworkId)>,
 ) {
+    println!("Client received id.");
     let local_client_id = **local_client;
     for (client, id) in network_ids.iter() {
         if *id == local_client_id {
@@ -169,6 +222,7 @@ fn check_all_clients_ready(
     mut commands: Commands,
 ) {
     // Need to check for disconnections in the Setup state.  This will miss them.
+    println!("{}", not_ready.iter().len());
     if not_ready.is_empty() {
         commands.server_trigger(ToClients {
             mode: SendMode::Broadcast,

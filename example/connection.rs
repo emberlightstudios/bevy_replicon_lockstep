@@ -23,7 +23,7 @@ pub(crate) fn start_server (
     channels: Res<RepliconChannels>,
     mut commands: Commands,
     settings: Res<SimulationSettings>,
-    server_settings: Res<ServerSettings>,
+    server_settings: Res<ConnectionSettings>,
 ) -> Result<(), Box<dyn Error>> {
     let server_channels_config = channels.server_configs();
     let client_channels_config = channels.client_configs();
@@ -35,7 +35,7 @@ pub(crate) fn start_server (
     });
 
     let current_time = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?;
-    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, server_settings.port))
+    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, server_settings.server_port))
       .map_err(|_| "Failed to bind socket on server")?;
     let server_config = ServerConfig {
       current_time,
@@ -54,12 +54,12 @@ pub(crate) fn start_server (
 pub(super) fn stop_server(
     _: Trigger<TriggerStopServer>,
     mut commands: Commands,
-    clients: Query<Entity, With<NetworkId>>,
+    replicated: Query<Entity, With<Replicated>>,
 ) {
     commands.remove_resource::<RenetServer>();
     commands.remove_resource::<NetcodeServerTransport>();
-    clients.iter().for_each(|client| {
-        commands.entity(client).despawn();
+    replicated.iter().for_each(|entity| {
+        commands.entity(entity).despawn();
     })
 }
 
@@ -67,10 +67,10 @@ pub(crate) fn connect_client(
     _: Trigger<TriggerConnectClient>,
     mut commands: Commands,
     channels: Res<RepliconChannels>,
-    server_settings: Res<ServerSettings>,
+    server_settings: Res<ConnectionSettings>,
 ) -> Result<(), Box<dyn Error>> {
-    let ip: Ipv4Addr = server_settings.address;
-    let port: u16 = server_settings.port;
+    let ip: Ipv4Addr = server_settings.server_address;
+    let port: u16 = server_settings.server_port;
     info!("connecting to {ip}:{port}");
     let server_channels_config = channels.server_configs();
     let client_channels_config = channels.client_configs();
@@ -103,11 +103,12 @@ pub(crate) fn connect_client(
 pub(crate) fn disconnect_client(
     _: Trigger<TriggerDisconnectClient>,
     mut commands: Commands,
-    clients: Query<Entity, With<NetworkId>>,
+    replicated: Query<Entity, With<Replicated>>,
 ) {
     commands.remove_resource::<RenetClient>();
     commands.remove_resource::<NetcodeClientTransport>();
-    clients.iter().for_each(|client| {
-        commands.entity(client).despawn();
+    info!("Cleaning up replicated components {}", replicated.iter().len());
+    replicated.iter().for_each(|entity| {
+        commands.entity(entity).despawn();
     })
 }

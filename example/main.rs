@@ -32,7 +32,7 @@ fn main() {
                 num_players: 2,
                 ..default()
             },
-            server: ServerSettings {
+            server: ConnectionSettings {
                 server_mode: ServerMode::Host,
                 ..default()
             }
@@ -62,10 +62,12 @@ fn main() {
             });
     }
 
+    app.add_observer(on_client_disconnect);
+    app.add_observer(on_client_reconnect);
     app.add_systems(Update,
         setup_game.run_if(in_state(SimulationState::Setup))
     );
-    app.add_systems(Update, test);
+    app.add_systems(Update, test.run_if(server_or_singleplayer));
     app.run();
 }
 
@@ -80,12 +82,26 @@ fn setup_game (
     }
 }
 
+fn on_client_disconnect(
+    _trigger: Trigger<ClientDisconnect>,
+) {
+    info!("Client disconnected");
+}
+
+fn on_client_reconnect(
+    _trigger: Trigger<ClientReconnect>,
+) {
+    /// reconnect logic
+    info!("Trying to reconnect to server");
+}
+
 fn test(
     mut commands: Commands,
     kb: Res<ButtonInput<KeyCode>>,
     sim_tick: Query<&SimulationTick>,
     cmd_types: Res<CommandTypeRegistry>,
 ) {
+    return;
     let Ok(tick) = sim_tick.get_single() else { return };
     if kb.just_pressed(KeyCode::Space) {
         commands.client_trigger(ClientSendCommands {

@@ -21,10 +21,12 @@ pub mod prelude {
     pub use crate::connections::{
         LocalClient,
         ClientId,
+        ClientReconnect,
+        ClientDisconnect,
         ClientReadyEvent,
         ClientReady,
         ServerMode,
-        ServerSettings,
+        ConnectionSettings,
     };
     pub use crate::commands::{
         ClientSendCommands,
@@ -38,7 +40,7 @@ pub mod prelude {
 #[derive(Default)]
 pub struct RepliconLockstepPlugin {
     pub simulation: SimulationSettings,
-    pub server: ServerSettings,
+    pub server: ConnectionSettings,
     pub commands: Vec<String>,
 }
 

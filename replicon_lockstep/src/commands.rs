@@ -128,6 +128,7 @@ struct ServerSendCommands {
 fn send_initial_commands_to_server(
     mut commands: Commands,
 ) {
+    println!("Sending intitial commands");
     commands.client_trigger(ClientSendCommands::default());
 }
 
@@ -135,15 +136,19 @@ fn send_initial_commands_to_server(
 /// At the beginning of each tick send an empty command queue
 /// just to let the server know we are still in the game
 fn send_empty_commands_to_server_on_tick(
-    sim_tick: Query<Mut<SimulationTick>>,
+    sim_tick: Query<&SimulationTick>,
+    mut prev_tick: Local<u32>,
     local_client: Query<&LocalClient>,
     mut commands: Commands
 ) {
     // Dont send commands if in dedicated server mode
     if local_client.get_single().is_err() { return }
 
-    if let Ok(tick) = sim_tick.get_single() {
-        if tick.is_changed() {
+    if sim_tick.get_single().is_ok() {
+        let tick = **sim_tick.single();
+        if tick != *prev_tick {
+            *prev_tick = tick;
+            println!("tick changed to {}, sending comamnds", **sim_tick.single());
             commands.client_trigger(ClientSendCommands {
                 issued_tick: **sim_tick.single(),
                 ..default()
@@ -167,8 +172,9 @@ fn receive_commands_server(
     // Server sent events use Entity::PLACEHOLDER
     // Instead I have set Host to have its own entity which has NetworkId=1
     let client_id = clients.get(trigger.client_entity).map_or(1, |id| id.get());
+    println!("server received commands from client {} for tick {}", client_id, trigger.event().issued_tick);
 
-    let mut tick = trigger.event().issued_tick;
+    let tick = trigger.event().issued_tick;
     history.entry(tick)
         .or_insert_with(LockstepClientCommands::new)
         .entry(client_id)
@@ -178,12 +184,13 @@ fn receive_commands_server(
     // Input tick delay depends on ping, for host server default to 3 ticks for now
     let tick_delay = stats
         .get(trigger.client_entity)
-        .map_or(3, |s| (s.rtt / 2.0).ceil() as SimTick + settings.base_input_tick_delay as SimTick);
-    tick += tick_delay;
+        .map_or(3, |s| (s.rtt / 2.0).ceil() as SimTick);
+    let execution_tick = tick + tick_delay + settings.base_input_tick_delay as SimTick;
+    println!("sending commands for execution tick {} for client {}", execution_tick, client_id);
     commands.server_trigger(ToClients {
         mode: SendMode::Broadcast,
         event: ServerSendCommands {
-            execute_tick: tick,
+            execute_tick: execution_tick,
             commands: trigger.event().commands.clone(),
             client_id: client_id,
         }
@@ -195,6 +202,7 @@ fn receive_commands_client(
     trigger: Trigger<ServerSendCommands>,
     mut game_commands: ResMut<LockstepGameCommandBuffer>,
 ) { 
+    //println!("local client received commands for execution tick {} from {}", trigger.execute_tick, trigger.client_id);
     game_commands.0
         .entry(trigger.execute_tick)
         .or_insert(LockstepClientCommands::default())

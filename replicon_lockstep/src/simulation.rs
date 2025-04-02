@@ -18,12 +18,12 @@ impl Plugin for LockstepSimulationPlugin {
             .add_client_trigger::<ClientReadyEvent>(Channel::Unordered)
             .add_systems(FixedPreUpdate,
                 tick
-                    .run_if(server_or_singleplayer)
+                    .run_if(server_running)
             )
             .add_systems(OnEnter(SimulationState::Starting),
                 start_simulation
                     .before(ServerSet::Send)
-                    .run_if(server_or_singleplayer)
+                    .run_if(server_running)
             );
     }
 }
@@ -62,17 +62,18 @@ impl Default for SimulationSettings {
         Self {
             tick_timestep: Duration::from_millis(33),
             num_players: 8,
-            base_input_tick_delay: 1,
-            connection_check_tick_delay: 1,
-            disconnect_tick_threshold: 30,
+            base_input_tick_delay: 2,
+            connection_check_tick_delay: 5,
+            disconnect_tick_threshold: 10,
         }
     }
 }
 
 /// Different states for the simulation
-#[derive(States, Debug, Hash, Eq, PartialEq, Copy, Clone, Serialize, Deserialize)]
+#[derive(States, Debug, Hash, Eq, PartialEq, Copy, Clone, Serialize, Deserialize, Default)]
 pub enum SimulationState {
     /// No simulation
+    #[default]
     None,
     /// Clients are connecting to the server/host.
     Connecting,
@@ -99,7 +100,7 @@ fn handle_sim_state_change(
     trigger: Trigger<SetSimulationState>,
     mut sim_state: ResMut<NextState<SimulationState>>
 ) {
-    info!("Simulation entering state {:#?}", trigger.0);
+    println!("Simulation entering state {:#?}", trigger.0);
     sim_state.set(trigger.0);
 }
 
@@ -141,13 +142,15 @@ fn tick(
     }
     let mut tick_to_check = **sim_tick.single();
     if tick_delay < tick_to_check { tick_to_check -= tick_delay }
+    println!("checking inputs for tick {}. tick delay is {}", tick_to_check, tick_delay);
 
     if let Some(clients_for_tick) = commands_received.get(&tick_to_check) {
         if clients_for_tick.iter().len() == clients.iter().len() {
-            //println!("YESSSSSSSS");
+            println!("YESSSSSSSS");
             sim_tick.single_mut().0 += 1;
+            *disconnect_timer = 0;
         } else {
-            //println!("NOOOOOOOOOO");
+            println!("NOOOOOOOOOO");
             *disconnect_timer += 1;
             if *disconnect_timer > settings.disconnect_tick_threshold {
                 *disconnect_timer = 0;
