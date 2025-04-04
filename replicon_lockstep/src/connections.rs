@@ -179,7 +179,7 @@ fn on_client_requested_id (
 ) {
     let Ok((client, client_id)) = network_ids.get(trigger.client_entity)
         else { panic!("Failed to find client entity on new connection") };
-    info!("Client {} requested id. Sending", client_id.get());
+    trace!("Client {} requested id. Sending", client_id.get());
     commands.server_trigger(ToClients {
         mode: SendMode::Direct(client),
         event: LocalClientIdResponseEvent(*client_id),
@@ -191,7 +191,7 @@ fn on_received_local_client_id(
     mut commands: Commands,
     network_ids: Query<(Entity, &NetworkId)>,
 ) {
-    info!("Received local client id.");
+    trace!("Received local client id.");
     let local_client_id = **local_client;
     for (client, id) in network_ids.iter() {
         if *id == local_client_id {

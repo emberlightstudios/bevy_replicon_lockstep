@@ -70,7 +70,12 @@ fn main() {
     app.add_systems(Update,
         setup_game.run_if(in_state(SimulationState::Setup))
     );
-    app.add_systems(Update, test.run_if(in_state(SimulationState::Running)));
+    app.add_systems(Update, (
+        send_command,
+        receive_commands.run_if(resource_changed::<LockstepGameCommandBuffer>)
+    )
+        .run_if(in_state(SimulationState::Running))
+    );
     app.run();
 }
 
@@ -98,7 +103,7 @@ fn on_client_reconnect(
     info!("Trying to reconnect to server");
 }
 
-fn test(
+fn send_command(
     mut commands: Commands,
     kb: Res<ButtonInput<KeyCode>>,
     sim_tick: Res<SimulationTick>,
@@ -114,7 +119,27 @@ fn test(
             ]),
             issued_tick: **sim_tick,
         });
+        info!("SENDING COMMANDS on tick {}", **sim_tick);
     }
 }
 
-
+fn receive_commands(
+    command_history: Res<LockstepGameCommandBuffer>,
+    sim_tick: Res<SimulationTick>,
+) {
+    let current_tick = **sim_tick;
+    // Normally you wouldn't be peeking into the future like this.  Just doing a demonstration
+    // to test that inputs are being relayed to clients with appropriate delays.
+    let Some(future_tick) = command_history.keys().max() else { return };
+    let tick_commands = command_history.get(future_tick).unwrap();
+    for (client, commands) in tick_commands {
+        if let Some(client_commands) = commands {
+            info!("RECEIVED COMMAND from client {} on tick {} to be executed on {} {:#?}",
+                client,
+                current_tick,
+                future_tick,
+                client_commands
+            );
+        }
+    }
+}

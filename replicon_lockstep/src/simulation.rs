@@ -2,7 +2,8 @@ use bevy::prelude::*;
 use bevy_replicon::{prelude::*, shared::backend::connected_client::NetworkId};
 use std::time::Duration;
 use serde::{Serialize, Deserialize};
-use crate::{commands::{LockstepGameCommandBuffer, LockstepGameCommandsReceived}, connections::ClientReady, prelude::ClientReadyEvent};
+use crate::prelude::*;
+use crate::{commands::{LockstepGameCommandBuffer, LockstepGameCommandsReceived}, connections::ClientReady};
 
 pub type SimTick = u32;
 
@@ -15,23 +16,16 @@ impl Plugin for LockstepSimulationPlugin {
     fn build(&self, app: &mut App) {
         app
             .insert_state(SimulationState::None)
+            .add_systems(OnEnter(SimulationState::Setup), setup_simulation)
+            .add_systems(OnEnter(SimulationState::Starting), start_simulation)
             .add_observer(handle_sim_state_change)
-            .add_server_event::<SimulationTickEvent>(Channel::Ordered)
+            .add_observer(tick_client)
+            .add_server_trigger::<SimulationTickEvent>(Channel::Ordered)
             .add_server_trigger::<SetSimulationState>(Channel::Ordered)
             .add_client_trigger::<ClientReadyEvent>(Channel::Unordered)
             .add_systems(FixedPostUpdate, 
                 tick_server
                     .run_if(server_running.and(in_state(SimulationState::Running)))
-                    .before(ServerSet::Send)
-            )
-            .add_systems(FixedPreUpdate, 
-                tick_client
-                    .run_if(client_connected.and(in_state(SimulationState::Running)).and(not(server_running)))
-                    .after(ClientSet::Receive)
-                    .in_set(SimulationTickSystemSet)
-            )
-            .add_systems(OnEnter(SimulationState::Starting), 
-                start_simulation
                     .before(ServerSet::Send)
             );
     }
@@ -59,7 +53,7 @@ pub struct SimulationSettings {
     /// will be added this value which will check even further in the past.
     /// This is also to account for packet jitter, but instead of delaying
     /// input execution, we are delaying disconnection signals.
-    pub connection_check_tick_delay: u8,
+    pub connection_check_tick_delay: u32,
     /// The number of tick equivalent timestaps we will wait for input
     /// before declaring a client is disconnected.  The simulation will be
     /// paused while waiting.
@@ -71,8 +65,8 @@ impl Default for SimulationSettings {
         Self {
             tick_timestep: Duration::from_millis(33),
             num_players: 8,
-            base_input_tick_delay: 2,
-            connection_check_tick_delay: 5,
+            base_input_tick_delay: 1,
+            connection_check_tick_delay: 1,
             disconnect_tick_threshold: 10,
         }
     }
@@ -101,16 +95,11 @@ pub enum SimulationState {
     Ending,
 }
 
-#[derive(Event, Serialize, Deserialize, Deref)]
-pub struct SimulationTickEvent(SimTick);
-
-#[derive(Resource, Deref, DerefMut, Default)]
-pub struct SimulationTick(SimTick);
-
 /// An event for the server to change the simulation state on the clients
 #[derive(Event, Serialize, Deserialize, Deref)]
 pub struct SetSimulationState(pub SimulationState);
 
+/// Changes the simlation state in response to server trigger
 fn handle_sim_state_change(
     trigger: Trigger<SetSimulationState>,
     mut sim_state: ResMut<NextState<SimulationState>>
@@ -119,13 +108,59 @@ fn handle_sim_state_change(
     sim_state.set(trigger.0);
 }
 
-/// Receives simulation tick events from the server
-fn tick_client(
-    mut ticks: EventReader<SimulationTickEvent>,
-    mut sim_tick: ResMut<SimulationTick>,
+fn setup_simulation(
+    mut commands: Commands,
+    mut command_history: ResMut<LockstepGameCommandBuffer>,
+    mut commands_received: ResMut<LockstepGameCommandsReceived>,
 ) {
-    for tick in ticks.read() {
-        sim_tick.0 = tick.0;
+    commands.insert_resource(SimulationTick(0));
+    command_history.clear();
+    commands_received.clear();
+}
+
+fn start_simulation(
+    mut commands: Commands,
+    ready: Query<Entity, With<ClientReady>>,
+    server: Res<RepliconServer>,
+) {
+    if server.is_running() {
+        commands.server_trigger(ToClients {
+            mode: SendMode::Broadcast,
+            event: SetSimulationState(SimulationState::Running),
+        });
+        for client in ready.iter() {
+            commands.entity(client).remove::<ClientReady>();
+        }
+    }
+}
+
+#[derive(Event, Serialize, Deserialize)]
+pub struct SimulationTickEvent {
+    pub tick: SimTick,
+    pub commands: Option<LockstepClientCommands>,
+}
+
+#[derive(Resource, Deref, DerefMut, Default)]
+pub struct SimulationTick(SimTick);
+
+
+/// Receives simulation tick events from the server.
+/// This system runs on remote clients only.
+fn tick_client(
+    tick: Trigger<SimulationTickEvent>,
+    mut sim_tick: ResMut<SimulationTick>,
+    mut command_history: ResMut<LockstepGameCommandBuffer>,
+    server: Res<RepliconServer>,
+) {
+    if server.is_running() { return }
+    if let Some(commands) = &tick.commands {
+        command_history.insert(tick.tick, commands.clone());
+    }
+    trace!("Received tick {}", tick.tick);
+    if tick.tick == sim_tick.0 + 1 || sim_tick.0 == 0 {
+        sim_tick.0 = tick.tick;
+    } else {
+        panic!("Received ticks out of order");
     }
 }
 
@@ -134,26 +169,27 @@ fn tick_server(
     mut disconnect_timer: Local<u8>,
     mut next_state: ResMut<NextState<SimulationState>>,
     mut sim_tick: ResMut<SimulationTick>,
-    mut tick_events: EventWriter<ToClients<SimulationTickEvent>>,
+    mut commands: Commands,
     clients: Query<&NetworkId>,
     stats: Query<&NetworkStats>,
     commands_received: Res<LockstepGameCommandsReceived>,
+    commands_buffer: Res<LockstepGameCommandBuffer>,
     settings: Res<SimulationSettings>,
 ) {
     let mut tick_delay = 0u32;
     if stats.iter().len() > 0 {  // True if clients connected
-        // Before ticking the sim for connected clients, we need to check
+        // Before ticking the sim for connected clients, we need to check received
         // client commands to make sure everyone is still connected and sending data. 
-        // We don't want to check the current tick because the timestep may be 
-        // smaller than the player's ping, so we check in the past based on the max rtt
-        // Essentially, we are letting the server's sim run a few ticks before clients'
-        // sims start so that clients are sufficiently behind the server's time once 
-        // they start replicating each other's commands.
+        // We don't want to check the current tick because the simulation timestep may be 
+        // smaller than the players' ping, so we go back in the past based on the max rtt.
+        // Essentially, we are letting the server's sim run a few ticks ahead of clients
+        // so that clients are sufficiently behind the server's time once they start
+        // replicating each other's commands.
         tick_delay = (stats
                 .iter()
                 .max_by(|a, b| a.rtt.partial_cmp(&b.rtt).unwrap())
                 .unwrap()
-                .rtt / 2.0).ceil() as u32 + settings.connection_check_tick_delay as u32;
+                .rtt / 2.0).ceil() as u32 + settings.connection_check_tick_delay;
     }
     let mut tick_to_check = sim_tick.0;
     if tick_delay < tick_to_check { tick_to_check -= tick_delay }
@@ -163,7 +199,14 @@ fn tick_server(
             sim_tick.0 += 1;
             trace!("ticked to {}", sim_tick.0);
             *disconnect_timer = 0;
-            tick_events.send(ToClients { mode: SendMode::Broadcast, event: SimulationTickEvent(sim_tick.0) });
+            let tick_commands = commands_buffer.get(&sim_tick.0).cloned();
+            commands.server_trigger(ToClients{
+                mode: SendMode::Broadcast,
+                event: SimulationTickEvent{
+                    tick: sim_tick.0,
+                    commands: tick_commands,
+                }
+            });
         } else {
             trace!("tick not ready");
             *disconnect_timer += 1;
@@ -172,27 +215,6 @@ fn tick_server(
                 info!("Simulation paused due to missing client commands. ");
                 next_state.set(SimulationState::Paused)
             }
-        }
-    }
-}
-
-fn start_simulation(
-    mut commands: Commands,
-    mut command_buffer: ResMut<LockstepGameCommandBuffer>,
-    mut command_history: ResMut<LockstepGameCommandsReceived>,
-    ready: Query<Entity, With<ClientReady>>,
-    server: Res<RepliconServer>,
-) {
-    commands.insert_resource(SimulationTick(0));
-    command_buffer.clear();
-    if server.is_running() {
-        command_history.clear();
-        commands.server_trigger(ToClients {
-            mode: SendMode::Broadcast,
-            event: SetSimulationState(SimulationState::Running),
-        });
-        for client in ready.iter() {
-            commands.entity(client).remove::<ClientReady>();
         }
     }
 }
