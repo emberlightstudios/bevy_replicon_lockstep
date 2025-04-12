@@ -9,18 +9,16 @@ pub type SimTick = u32;
 
 pub(crate) struct LockstepSimulationPlugin;
 
-#[derive(SystemSet, Debug, Eq, PartialEq, Clone, Hash)]
-pub struct SimulationTickSystemSet;
-
 impl Plugin for LockstepSimulationPlugin {
     fn build(&self, app: &mut App) {
         app
             .insert_state(SimulationState::None)
+            .add_event::<SimulationTickUpdate>()
             .add_systems(OnEnter(SimulationState::Setup), setup_simulation)
             .add_systems(OnEnter(SimulationState::Starting), start_simulation)
             .add_observer(handle_sim_state_change)
             .add_observer(tick_client)
-            .add_server_trigger::<SimulationTickEvent>(Channel::Ordered)
+            .add_server_trigger::<ServerSimulationTickReady>(Channel::Ordered)
             .add_server_trigger::<SetSimulationState>(Channel::Ordered)
             .add_client_trigger::<ClientReadyEvent>(Channel::Unordered)
             .add_systems(FixedPostUpdate, 
@@ -40,9 +38,9 @@ pub struct SimulationSettings {
     pub num_players: u8,
     /// Lockstep simulations have an inherent input lag.  The simulation is
     /// always executing commands issued in the past to avoid desyncs.
-    /// There is no client-side prediction or extrapolation.  This is the
+    /// There is no client-side prediction or extrapolation.  This field is the
     /// base tick delay for all client inputs, regardless of ping. Round trip
-    /// time gets added to this to determine the total input delay.  This 
+    /// time / 2 gets added to this to determine the total input delay.  This 
     /// parameter helps account for packet jitter.
     pub base_input_tick_delay: u8,
     /// The simulation checks for client inputs before proceeding to the 
@@ -67,7 +65,7 @@ impl Default for SimulationSettings {
             num_players: 8,
             base_input_tick_delay: 1,
             connection_check_tick_delay: 1,
-            disconnect_tick_threshold: 10,
+            disconnect_tick_threshold: 20,
         }
     }
 }
@@ -134,34 +132,40 @@ fn start_simulation(
     }
 }
 
+/// Internal trigger will send a SimulationTickEvent after storing commands
 #[derive(Event, Serialize, Deserialize)]
-pub struct SimulationTickEvent {
-    pub tick: SimTick,
-    pub commands: Option<LockstepClientCommands>,
+pub(crate) struct ServerSimulationTickReady {
+    pub(crate) tick: SimTick,
+    pub(crate) commands: Option<LockstepClientCommands>,
 }
 
+/// Event triggered when the simulation ticks
+#[derive(Event, Serialize, Deserialize, Deref)]
+pub struct SimulationTickUpdate(pub SimTick);
+
+/// The current simulation tick
 #[derive(Resource, Deref, DerefMut, Default)]
 pub struct SimulationTick(SimTick);
 
 
 /// Receives simulation tick events from the server.
-/// This system runs on remote clients only.
 fn tick_client(
-    tick: Trigger<SimulationTickEvent>,
+    tick: Trigger<ServerSimulationTickReady>,
     mut sim_tick: ResMut<SimulationTick>,
     mut command_history: ResMut<LockstepGameCommandBuffer>,
+    mut sim_tick_event: EventWriter<SimulationTickUpdate>,
     server: Res<RepliconServer>,
 ) {
-    if server.is_running() { return }
-    if let Some(commands) = &tick.commands {
-        command_history.insert(tick.tick, commands.clone());
+    if !server.is_running() {
+        command_history.insert(tick.tick, tick.commands.as_ref().unwrap().clone());
+        trace!("Received tick {}", tick.tick);
+        if tick.tick == sim_tick.0 + 1 || sim_tick.0 == 0 {
+            sim_tick.0 = tick.tick;
+        } else {
+            panic!("Received ticks out of order");
+        }
     }
-    trace!("Received tick {}", tick.tick);
-    if tick.tick == sim_tick.0 + 1 || sim_tick.0 == 0 {
-        sim_tick.0 = tick.tick;
-    } else {
-        panic!("Received ticks out of order");
-    }
+    sim_tick_event.send(SimulationTickUpdate(tick.tick));
 }
 
 /// Handles incrementing the simulation tick on the server
@@ -173,7 +177,7 @@ fn tick_server(
     clients: Query<&NetworkId>,
     stats: Query<&NetworkStats>,
     commands_received: Res<LockstepGameCommandsReceived>,
-    commands_buffer: Res<LockstepGameCommandBuffer>,
+    mut commands_buffer: ResMut<LockstepGameCommandBuffer>,
     settings: Res<SimulationSettings>,
 ) {
     let mut tick_delay = 0u32;
@@ -187,7 +191,7 @@ fn tick_server(
         // replicating each other's commands.
         tick_delay = (stats
                 .iter()
-                .max_by(|a, b| a.rtt.partial_cmp(&b.rtt).unwrap())
+                .max_by(|a: &&NetworkStats, b: &&NetworkStats| a.rtt.partial_cmp(&b.rtt).unwrap())
                 .unwrap()
                 .rtt / 2.0).ceil() as u32 + settings.connection_check_tick_delay;
     }
@@ -199,12 +203,14 @@ fn tick_server(
             sim_tick.0 += 1;
             trace!("ticked to {}", sim_tick.0);
             *disconnect_timer = 0;
-            let tick_commands = commands_buffer.get(&sim_tick.0).cloned();
+            let tick_commands = commands_buffer
+                .entry(sim_tick.0)
+                .or_insert(LockstepClientCommands::new());
             commands.server_trigger(ToClients{
                 mode: SendMode::Broadcast,
-                event: SimulationTickEvent{
+                event: ServerSimulationTickReady{
                     tick: sim_tick.0,
-                    commands: tick_commands,
+                    commands: Some(tick_commands.clone()),
                 }
             });
         } else {

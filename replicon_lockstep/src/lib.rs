@@ -1,5 +1,4 @@
 use bevy::prelude::*;
-use avian3d::prelude::*;
 
 mod simulation;
 mod connections;
@@ -16,8 +15,8 @@ pub mod prelude {
         SimulationSettings,
         SimulationState,
         SimulationTick,
-        SimulationTickEvent,
         SimTick,
+        SimulationTickUpdate,
     };
     pub use crate::connections::{
         LocalClient,
@@ -55,7 +54,6 @@ impl Plugin for RepliconLockstepPlugin {
                 LockstepConnectionsPlugin,
                 LockstepSimulationPlugin,
                 LockstepCommandsPlugin,
-                PhysicsPlugins::default(),
             ))
             .insert_resource(Time::<Fixed>::from_duration(self.simulation.tick_timestep));
     }

@@ -1077,7 +1077,6 @@ dependencies = [
 name = "bevy_replicon_lockstep"
 version = "0.1.0"
 dependencies = [
- "avian3d",
  "bevy",
  "bevy_replicon",
  "bevy_replicon_renet",
@@ -2119,6 +2118,7 @@ dependencies = [
 name = "example"
 version = "0.1.0"
 dependencies = [
+ "avian3d",
  "bevy",
  "bevy_replicon",
  "bevy_replicon_lockstep",

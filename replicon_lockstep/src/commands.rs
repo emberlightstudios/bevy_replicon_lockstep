@@ -1,7 +1,7 @@
 use bevy::{prelude::*, utils::hashbrown::{HashMap, HashSet}};
 use bevy_replicon::{prelude::*, shared::backend::connected_client::NetworkId};
 use serde::{Deserialize, Serialize};
-use crate::{prelude::*, simulation::SimulationTickEvent};
+use crate::{prelude::*, simulation::ServerSimulationTickReady};
 
 pub(crate) struct LockstepCommandsPlugin;
 
@@ -133,7 +133,7 @@ fn send_initial_commands_to_server(
 /// Make sure we at least send empty commands on each tick to let
 /// the server know we are still in the game
 fn send_empty_commands_to_server_on_tick(
-    tick: Trigger<SimulationTickEvent>,
+    tick: Trigger<ServerSimulationTickReady>,
     mut commands: Commands,
     sim_tick: Res<SimulationTick>,
     local_client: Query<&LocalClient>,
@@ -166,32 +166,35 @@ fn receive_commands_server(
     let client_commands = trigger.event().commands.clone();
     trace!("server received commands from client {} for tick {}", client_id, trigger.event().issued_tick);
 
+    // Track received commands always, even when none, for managing connections
     let tick = trigger.event().issued_tick;
     received.entry(tick)
         .or_insert_with(LockstepClientCommands::new)
         .entry(client_id)
         .insert(client_commands.clone());
 
-    // Broadcast to all clients with a tick delay
-    // Input tick delay depends on ping, for host server default to 3 ticks for now
-    let tick_delay = stats
-        .get(trigger.client_entity)
-        .map_or(3, |s| (s.rtt / 2.0).ceil() as SimTick);
-    let execution_tick = tick + tick_delay + settings.base_input_tick_delay as SimTick;
-    trace!("storing commands for execution tick {} for client {}", execution_tick, client_id);
-    history.entry(execution_tick)
-        .or_insert_with(LockstepClientCommands::new)
-        .entry(client_id)
-        .insert(client_commands);
+    // But only send valid commands back to clients
+    if client_commands.is_some() {
+        // Input tick delay depends on ping, for host server default to 1 tick for now
+        let tick_delay = stats
+            .get(trigger.client_entity)
+            .map_or(1, |s| ((s.rtt / 2.0) / settings.tick_timestep.as_secs_f64()).ceil() as SimTick);
+        let execution_tick = tick + tick_delay + settings.base_input_tick_delay as SimTick;
+        trace!("storing commands for execution tick {} for client {}", execution_tick, client_id);
+        history.entry(execution_tick)
+            .or_insert_with(LockstepClientCommands::new)
+            .entry(client_id)
+            .insert(client_commands);
 
-    //commands.server_trigger(ToClients {
-    //    mode: SendMode::Broadcast,
-    //    event: ServerSendCommands {
-    //        execute_tick: execution_tick,
-    //        commands: client_commands,
-    //        client_id: client_id,
-    //    }
-    //});
+        //commands.server_trigger(ToClients {
+        //    mode: SendMode::Broadcast,
+        //    event: ServerSendCommands {
+        //        execute_tick: execution_tick,
+        //        commands: client_commands,
+        //        client_id: client_id,
+        //    }
+        //});
+    }
 }
 
 //  Store the commands from the server in a command buffer to be executed in future ticks

@@ -3,8 +3,10 @@ use bevy_replicon::prelude::*;
 use bevy_replicon_lockstep::prelude::*;
 use bevy_replicon_renet::RepliconRenetPlugins;
 use std::{env, time::Duration};
+use avian3d::prelude::*;
 
 mod connection;
+mod environment;
 
 fn main() {
     let mut app = App::new();
@@ -17,6 +19,9 @@ fn main() {
                 }.into(),
                 ..default()
             }),
+        // I put this before the lockstep plugin because it inserts its own 
+        // Fixed<Time> resource
+        PhysicsPlugins::default(),
         // Most lockstep communication is message based so we don't need a fast
         // tick rate.  But we do need repliation to happen periodically to 
         // handle client connections.
@@ -67,12 +72,15 @@ fn main() {
 
     app.add_observer(on_client_disconnect);
     app.add_observer(on_client_reconnect);
-    app.add_systems(Update,
+    app.add_systems(OnEnter(SimulationState::Setup), 
+            environment::setup_environment,
+    );
+    app.add_systems(Update, 
         setup_game.run_if(in_state(SimulationState::Setup))
     );
     app.add_systems(Update, (
         send_command,
-        receive_commands.run_if(resource_changed::<LockstepGameCommandBuffer>)
+        receive_commands,
     )
         .run_if(in_state(SimulationState::Running))
     );
@@ -83,8 +91,9 @@ fn setup_game (
     mut commands: Commands,
     local_client: Query<Entity, (With<LocalClient>, Without<ClientReady>)>,
 ) {
-    // handle loading assets used in the game...
-    // when ready inform the server
+    // This part needs to run in a loop because the setup phase may have been entered
+    // before the local client_id was received.  Other logic can run here also,
+    // e.g. loading progress bars.
     if let Ok(_) = local_client.get_single() {
         commands.client_trigger(ClientReadyEvent);
     }
@@ -103,6 +112,7 @@ fn on_client_reconnect(
     info!("Trying to reconnect to server");
 }
 
+// Testing command replication
 fn send_command(
     mut commands: Commands,
     kb: Res<ButtonInput<KeyCode>>,
@@ -123,23 +133,25 @@ fn send_command(
     }
 }
 
+// You probably always want to break after the first tick event
+// just in case multiple tick packets come in at once.  That way
+// you only tick once in the update loop, so all your system logic
+// stays in sync.
 fn receive_commands(
     command_history: Res<LockstepGameCommandBuffer>,
-    sim_tick: Res<SimulationTick>,
+    mut new_ticks: EventReader<SimulationTickUpdate>,
 ) {
-    let current_tick = **sim_tick;
-    // Normally you wouldn't be peeking into the future like this.  Just doing a demonstration
-    // to test that inputs are being relayed to clients with appropriate delays.
-    let Some(future_tick) = command_history.keys().max() else { return };
-    let tick_commands = command_history.get(future_tick).unwrap();
-    for (client, commands) in tick_commands {
-        if let Some(client_commands) = commands {
-            info!("RECEIVED COMMAND from client {} on tick {} to be executed on {} {:#?}",
-                client,
-                current_tick,
-                future_tick,
-                client_commands
-            );
+    for new_tick in new_ticks.read() {
+        let tick_commands = command_history.get(&new_tick.0).unwrap();
+        for (client, commands) in tick_commands {
+            if let Some(client_commands) = commands {
+                info!("RECEIVED COMMAND from client {} for tick {} {:#?}",
+                    client,
+                    new_tick.0,
+                    client_commands
+                );
+            }
         }
+        break;
     }
 }

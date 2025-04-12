@@ -8,7 +8,6 @@ bevy = { workspace = true }
 bevy_replicon = { workspace = true }
 bevy_replicon_renet = { workspace = true }
 serde = { workspace = true }
-avian3d = { workspace = true }
 
 [[bin]]
 name = "example"
