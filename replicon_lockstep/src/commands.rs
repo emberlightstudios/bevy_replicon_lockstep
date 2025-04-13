@@ -19,18 +19,20 @@ impl Plugin for LockstepCommandsPlugin {
     }
 }
 
+
 /// The base type for commands which clients can send to the server.
 /// The server will broadcast these to all connected clients.
 /// If it fails to receive any from a client the simulation will change
 /// state to paused and you can implement logic for reconnect, host migration etc.
+/// A vec of commands sould only be sent to the server once per tick.
 /// 
 /// Adding many command components to a large number of entities can incur
 /// overhead in the ECS command buffer. Instead of putting these on each entity
 /// and replicating, these commands are sent via events bidrectionally and can hold
-/// a Vec<Entity> specifying which entities are issued this command.  This should
+/// a Vec<SimulationId> specifying which entities are issued this command.  This should
 /// reduce network overhead I think.
 /// 
-/// Nevertheless it is implemented as a component so it can be added to entities
+/// Nevertheless it is derives component so it can be added to entities
 /// if desired. Although in this case it would save memory to set the entities field
 /// to None.
 /// 
@@ -42,7 +44,7 @@ pub struct LockstepCommand {
     /// The id of the type of command
     pub command_type_id: u16,
     /// The entities which will carry out the command
-    pub entities: Option<Vec<Entity>>,
+    pub entities: Option<Vec<SimulationId>>,
     /// An optional follow-up command which should begin when this one ends
     pub then: Option<Box<LockstepCommand>>,
     /// A vec3 target for the command

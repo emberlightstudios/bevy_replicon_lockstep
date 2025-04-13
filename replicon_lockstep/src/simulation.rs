@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use bevy_replicon::{prelude::*, shared::backend::connected_client::NetworkId};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 use serde::{Serialize, Deserialize};
 use crate::prelude::*;
@@ -147,6 +148,17 @@ pub struct SimulationTickUpdate(pub SimTick);
 #[derive(Resource, Deref, DerefMut, Default)]
 pub struct SimulationTick(SimTick);
 
+static SIMULATION_ID_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+/// Unique Id for each simulation entity which can be commanded
+#[derive(Component, Deref, Serialize, Deserialize, Debug, Clone)]
+pub struct SimulationId(u32);
+
+impl SimulationId {
+    fn new() -> Self {
+        Self(SIMULATION_ID_COUNTER.fetch_add(1, Ordering::Relaxed))
+    }
+}
 
 /// Receives simulation tick events from the server.
 fn tick_client(

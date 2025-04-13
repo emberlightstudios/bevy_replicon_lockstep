@@ -17,6 +17,7 @@ pub mod prelude {
         SimulationTick,
         SimTick,
         SimulationTickUpdate,
+        SimulationId,
     };
     pub use crate::connections::{
         LocalClient,
