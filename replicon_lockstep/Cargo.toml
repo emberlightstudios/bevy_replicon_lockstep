@@ -8,6 +8,8 @@ bevy = { workspace = true }
 bevy_replicon = { workspace = true }
 bevy_replicon_renet = { workspace = true }
 serde = { workspace = true }
+erased-serde = { workspace = true }
+bincode = { workspace = true }
 
 [[bin]]
 name = "example"

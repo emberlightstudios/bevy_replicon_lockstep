@@ -51,7 +51,7 @@ pub(crate) fn start_server (
     Ok(())
 }
   
-pub(super) fn stop_server(
+pub(crate) fn stop_server(
     _: Trigger<TriggerStopServer>,
     mut commands: Commands,
     replicated: Query<Entity, With<Replicated>>,
@@ -100,7 +100,7 @@ pub(crate) fn connect_client(
     Ok(())
 }
 
-pub(crate) fn disconnect_client(
+pub fn disconnect_client(
     _: Trigger<TriggerDisconnectClient>,
     mut commands: Commands,
     replicated: Query<Entity, With<Replicated>>,
@@ -111,4 +111,17 @@ pub(crate) fn disconnect_client(
     replicated.iter().for_each(|entity| {
         commands.entity(entity).despawn();
     })
+}
+
+pub(crate) fn on_client_disconnect(
+    _trigger: Trigger<ClientDisconnect>,
+) {
+    info!("Client disconnected");
+}
+
+pub(crate) fn on_client_reconnect(
+    _trigger: Trigger<ClientReconnect>,
+) {
+    // reconnect logic
+    info!("Trying to reconnect to server");
 }

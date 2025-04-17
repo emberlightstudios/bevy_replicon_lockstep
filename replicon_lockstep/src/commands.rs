@@ -1,7 +1,12 @@
-use bevy::{prelude::*, utils::hashbrown::{HashMap, HashSet}};
+use bevy::{
+    prelude::*, reflect::MaybeTyped, utils::hashbrown::HashMap
+};
 use bevy_replicon::{prelude::*, shared::backend::connected_client::NetworkId};
-use serde::{Deserialize, Serialize};
-use crate::{prelude::*, simulation::ServerSimulationTickReady};
+use types::MoveCommand;
+use crate::prelude::*;
+
+pub(crate) mod serialization;
+pub mod types;
 
 pub(crate) struct LockstepCommandsPlugin;
 
@@ -10,115 +15,102 @@ impl Plugin for LockstepCommandsPlugin {
         app
             .init_resource::<LockstepGameCommandBuffer>()
             .init_resource::<LockstepGameCommandsReceived>()
-            .add_client_trigger::<ClientSendCommands>(Channel::Ordered)
-            //.add_server_trigger::<ServerSendCommands>(Channel::Ordered)
+            .add_server_trigger_with::<ServerSendCommands>(
+                Channel::Ordered, 
+                serialization::serialize_server_send_commands,
+                serialization::deserialize_server_send_commands,
+            )
+            .add_client_trigger_with::<ClientSendCommands>(
+                Channel::Ordered, 
+                serialization::serialize_client_send_commands,
+                serialization::deserialize_client_send_commands,
+            )
             .add_observer(receive_commands_server)
-            //.add_observer(receive_commands_client)
             .add_observer(send_empty_commands_to_server_on_tick)
             .add_systems(OnEnter(SimulationState::Running), send_initial_commands_to_server);
     }
 }
 
+/// Implement thsi trait for all command structs
+//#[reflect_trait]
+//pub trait LockstepCommandPayload: PartialReflect + Send + Sync {
+//    fn clone_box(&self) -> Box<dyn LockstepCommandPayload>;
+//}
 
-/// The base type for commands which clients can send to the server.
-/// The server will broadcast these to all connected clients.
-/// If it fails to receive any from a client the simulation will change
-/// state to paused and you can implement logic for reconnect, host migration etc.
-/// A vec of commands sould only be sent to the server once per tick.
-/// 
-/// Adding many command components to a large number of entities can incur
-/// overhead in the ECS command buffer. Instead of putting these on each entity
-/// and replicating, these commands are sent via events bidrectionally and can hold
-/// a Vec<SimulationId> specifying which entities are issued this command.  This should
-/// reduce network overhead I think.
-/// 
-/// Nevertheless it is derives component so it can be added to entities
-/// if desired. Although in this case it would save memory to set the entities field
-/// to None.
-/// 
-/// This struct is intended to hold all necessary fields to specify everything
-/// about the command.  More fields may need to be added in the future.
-/// 
-#[derive(Component, Debug, Serialize, Deserialize, Clone, Default)]
-pub struct LockstepCommand {
-    /// The id of the type of command
-    pub command_type_id: u16,
-    /// The entities which will carry out the command
-    pub entities: Option<Vec<SimulationId>>,
-    /// An optional follow-up command which should begin when this one ends
-    pub then: Option<Box<LockstepCommand>>,
-    /// A vec3 target for the command
-    pub target_vector: Option<Vec3>,
-    /// An entity target for the command
-    pub target_entity: Option<Entity>,
+/// Auto impl trait if trait bounds satisfy
+/// Users can simply implement command payloads as PartialReflect + Clone
+//impl<T> LockstepCommandPayload for T
+//where
+//    T: PartialReflect + Send + Sync + Clone,
+//{
+//    fn clone_box(&self) -> Box<dyn LockstepCommandPayload> {
+//        Box::new(self.clone())
+//    }
+//}
+//
+//impl Clone for Box<dyn LockstepCommandPayload> {
+//    fn clone(&self) -> Self {
+//        self.clone_box()
+//    }
+//}
+
+/// An event type for clients to send their commands for their current tick to the server
+#[derive(Event, Default, TypePath)]
+pub struct ClientSendCommands {
+    pub issued_tick: SimTick,
+    pub commands: Vec<Box<dyn PartialReflect>>,
 }
 
-/// This could probably be handled more idiomatically with some 
-/// more advanced rust type shenanigans, but I coudn't figure out how.
-/// Could use enums but it's not extensible for users of this crate.
-/// Instead we will just use strings for now, but map them to u16 to 
-/// keep serialization payload size down.
-#[derive(Resource)]
-pub struct CommandTypeRegistry {
-    name_to_id: HashMap<String, u16>,
-    id_to_name: HashMap<u16, String>,
-}
-
-impl CommandTypeRegistry {
-    pub fn new(commands: Vec<String>) -> Self {
-        let command_set: HashSet<String> = HashSet::from_iter(commands);
-        let mut name_to_id = HashMap::<String, u16>::new();
-        let mut id_to_name = HashMap::<u16, String>::new();
-        for (i, name) in command_set.iter().enumerate() {
-            name_to_id.insert(name.clone(), i as u16);
-            id_to_name.insert(i as u16, name.clone());
-        }
-        CommandTypeRegistry {
-            name_to_id,
-            id_to_name,
+impl Clone for ClientSendCommands {
+    fn clone(&self) -> Self {
+        Self {
+            issued_tick: self.issued_tick.clone(),
+            commands: self.commands.iter().map(|x| x.clone_value()).collect(),
         }
     }
+}
 
-    pub fn get_id(&self, name: String) -> Option<&u16> {
-        self.name_to_id.get(&name)
-    }
+/// An event type for the server to broadcast client commands with delayed tick
+#[derive(Event, Default)]
+pub(crate) struct ServerSendCommands {
+    pub(crate) tick: SimTick,
+    pub(crate) commands: LockstepClientCommands,
+}
 
-    pub fn get_name(&self, id: u16) -> Option<&String> {
-        self.id_to_name.get(&id)
+/// A type for storing per-client commands for one tick
+#[derive(Default, Deref, DerefMut)]
+pub struct LockstepClientCommands(HashMap<ClientId, Vec<Box<dyn PartialReflect>>>);
+
+impl Clone for LockstepClientCommands {
+    fn clone(&self) -> Self {
+        Self(
+            self.0
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        v.iter().map(|x| x.clone_value()).collect(),
+                    )
+                }).collect()
+        )
     }
 }
 
-pub type LockstepClientCommands = HashMap<ClientId, Option<Vec<LockstepCommand>>>;
 
 /// The client sends commands to the server and they get stored in this buffer
 /// based on the tick they received from the client, i.e. the tick when issued.
 /// This is only used on the server.  It's sole purpose is to track who is still 
 /// sending data currently so that we can detect disconnects.
-#[derive(Resource, Default, Deref, DerefMut, Debug)]
+#[derive(Resource, Default, Deref, DerefMut)]
 pub(crate) struct LockstepGameCommandsReceived(HashMap<SimTick, LockstepClientCommands>);
 
-/// This wraps the same as LockstepGameCommandsReceived. The difference is that
+/// This is similar to LockstepGameCommandsReceived. The difference is that
 /// this is used on both clients and the server, and the tick keys have been delayed.
 /// The server broadcasts commands to clients and they get stored in this buffer.
 /// Inputs have client delays added to the tick to account for the ping of each client.
 /// Users should implement systems in FixedUpdate to handle these commands.
-#[derive(Resource, Default, Deref, DerefMut, Debug)]
+#[derive(Resource, Default, Deref, DerefMut)]
 pub struct LockstepGameCommandBuffer(HashMap<SimTick, LockstepClientCommands>);
-
-/// An event type for clients to send their commands for their current tick to the server
-#[derive(Event, Serialize, Deserialize, Default, Debug)]
-pub struct ClientSendCommands {
-    pub commands: Option<Vec<LockstepCommand>>,
-    pub issued_tick: SimTick,
-}
-
-/// An event type for the server to broadcast received commands to clients
-//#[derive(Event, Serialize, Deserialize, Default)]
-//struct ServerSendCommands {
-//    commands: Option<Vec<LockstepCommand>>,
-//    execute_tick: SimTick,
-//    client_id: ClientId,
-//}
 
 /// The server ticks only if it gets commands from all clients,
 /// but by default clients only send commands when the server ticks.
@@ -135,7 +127,7 @@ fn send_initial_commands_to_server(
 /// Make sure we at least send empty commands on each tick to let
 /// the server know we are still in the game
 fn send_empty_commands_to_server_on_tick(
-    tick: Trigger<ServerSimulationTickReady>,
+    tick: Trigger<ServerSendCommands>,
     mut commands: Commands,
     sim_tick: Res<SimulationTick>,
     local_client: Query<&LocalClient>,
@@ -157,6 +149,7 @@ fn receive_commands_server(
     trigger: Trigger<FromClient<ClientSendCommands>>,
     mut received: ResMut<LockstepGameCommandsReceived>,
     mut history: ResMut<LockstepGameCommandBuffer>,
+    current_tick: Res<SimulationTick>,
     clients: Query<&NetworkId>,
     settings: Res<SimulationSettings>,
     stats: Query<&NetworkStats>,
@@ -164,50 +157,30 @@ fn receive_commands_server(
     // In host server mode, the server can send events to itself
     // Server sent events use Entity::PLACEHOLDER
     // Instead I have set Host to have its own entity which has NetworkId=1
-    let client_id = clients.get(trigger.client_entity).map_or(1, |id| id.get());
-    let client_commands = trigger.event().commands.clone();
+    let client_id: u64 = clients.get(trigger.client_entity).map_or(1, |id: &NetworkId| id.get());
+    let client_commands: &Vec<Box<dyn PartialReflect>> = &trigger.event().commands;
+    let num_commands = client_commands.iter().len();
     trace!("server received commands from client {} for tick {}", client_id, trigger.event().issued_tick);
 
-    // Track received commands always, even when none, for managing connections
+    // Track received commands always, even when empty, for managing connections
     let tick = trigger.event().issued_tick;
     received.entry(tick)
-        .or_insert_with(LockstepClientCommands::new)
+        .or_insert_with(LockstepClientCommands::default)
         .entry(client_id)
-        .insert(client_commands.clone());
+        .insert(client_commands.iter().map(|x| x.clone_value()).collect());
 
     // But only send valid commands back to clients
-    if client_commands.is_some() {
+    if num_commands > 0 {
         // Input tick delay depends on ping, for host server default to 1 tick for now
-        let tick_delay = stats
+        let tick_delay: u32 = stats
             .get(trigger.client_entity)
-            .map_or(1, |s| ((s.rtt / 2.0) / settings.tick_timestep.as_secs_f64()).ceil() as SimTick);
-        let execution_tick = tick + tick_delay + settings.base_input_tick_delay as SimTick;
+            .map_or(1, |s: &NetworkStats| ((s.rtt / 2.0) / settings.tick_timestep.as_secs_f64()).ceil() as SimTick);
+        let execution_tick = **current_tick + tick_delay + settings.base_input_tick_delay as SimTick;
         trace!("storing commands for execution tick {} for client {}", execution_tick, client_id);
         history.entry(execution_tick)
-            .or_insert_with(LockstepClientCommands::new)
+            .or_insert_with(LockstepClientCommands::default)
             .entry(client_id)
-            .insert(client_commands);
+            .insert(client_commands.iter().map(|x| x.clone_value()).collect());
 
-        //commands.server_trigger(ToClients {
-        //    mode: SendMode::Broadcast,
-        //    event: ServerSendCommands {
-        //        execute_tick: execution_tick,
-        //        commands: client_commands,
-        //        client_id: client_id,
-        //    }
-        //});
     }
 }
-
-//  Store the commands from the server in a command buffer to be executed in future ticks
-//fn receive_commands_client(
-//    trigger: Trigger<ServerSendCommands>,
-//    mut game_commands: ResMut<LockstepGameCommandBuffer>,
-//) { 
-//    trace!("local client received commands for execution tick {} from {}", trigger.execute_tick, trigger.client_id);
-//    game_commands.0
-//        .entry(trigger.execute_tick)
-//        .or_insert(LockstepClientCommands::default())
-//        .entry(trigger.client_id)
-//        .insert(trigger.commands.clone()); 
-//}

@@ -1,12 +1,16 @@
 use bevy::{prelude::*, render::{settings::{Backends, WgpuSettings}, RenderPlugin}};
 use bevy_replicon::prelude::*;
-use bevy_replicon_lockstep::prelude::*;
+use bevy_replicon_lockstep::{
+    commands::types::MoveCommand,
+    prelude::*
+};
 use bevy_replicon_renet::RepliconRenetPlugins;
 use std::{env, time::Duration};
 use avian3d::prelude::*;
 
 mod connection;
 mod environment;
+
 
 fn main() {
     let mut app = App::new();
@@ -26,14 +30,11 @@ fn main() {
         // tick rate.  But we do need repliation to happen periodically to 
         // handle client connections.
         RepliconPlugins.set(ServerPlugin {
-            tick_policy: TickPolicy::MaxTickRate(15),
+            tick_policy: TickPolicy::EveryFrame,
             ..default()
         }),
         RepliconRenetPlugins,
         RepliconLockstepPlugin {
-            commands: vec![
-                String::from("move")
-            ],
             simulation: SimulationSettings {
                 // ~30 ticks per second
                 tick_timestep: Duration::from_millis(33),
@@ -46,10 +47,13 @@ fn main() {
             }
         }
     ));
+    app.register_type::<MoveCommand>();
     app.add_observer(connection::start_server.map(|_res| {}));
     app.add_observer(connection::connect_client.map(|_res| {}));
     app.add_observer(connection::stop_server);
     app.add_observer(connection::disconnect_client);
+    app.add_observer(connection::on_client_disconnect);
+    app.add_observer(connection::on_client_reconnect);
 
     // Run `cargo run server` to start a host server
     if env::args().collect::<Vec<String>>().iter().any(|arg| {arg == "server"}) {
@@ -70,10 +74,8 @@ fn main() {
             });
     }
 
-    app.add_observer(on_client_disconnect);
-    app.add_observer(on_client_reconnect);
     app.add_systems(OnEnter(SimulationState::Setup), 
-            environment::setup_environment,
+        environment::setup_environment,
     );
     app.add_systems(Update, 
         setup_game.run_if(in_state(SimulationState::Setup))
@@ -99,59 +101,40 @@ fn setup_game (
     }
 }
 
-fn on_client_disconnect(
-    _trigger: Trigger<ClientDisconnect>,
-) {
-    info!("Client disconnected");
-}
-
-fn on_client_reconnect(
-    _trigger: Trigger<ClientReconnect>,
-) {
-    // reconnect logic
-    info!("Trying to reconnect to server");
-}
-
-// Testing command replication
+// Testing sending commands to server
 fn send_command(
     mut commands: Commands,
     kb: Res<ButtonInput<KeyCode>>,
     sim_tick: Res<SimulationTick>,
-    cmd_types: Res<CommandTypeRegistry>,
 ) {
     if kb.just_pressed(KeyCode::Space) {
         commands.client_trigger(ClientSendCommands {
-            commands: Some(vec![
-                LockstepCommand {
-                    command_type_id: *cmd_types.get_id("move".to_string()).unwrap(),
-                    ..default()
-                }
-            ]),
+            commands: vec![
+                Box::new(MoveCommand(Vec3::splat(2.0)))
+            ],
             issued_tick: **sim_tick,
         });
         info!("SENDING COMMANDS on tick {}", **sim_tick);
     }
 }
 
-// You probably always want to break after the first tick event
-// just in case multiple tick packets come in at once.  That way
-// you only tick once in the update loop, so all your system logic
-// stays in sync.
+// Test receiving commands from server on tick
 fn receive_commands(
     command_history: Res<LockstepGameCommandBuffer>,
     mut new_ticks: EventReader<SimulationTickUpdate>,
 ) {
     for new_tick in new_ticks.read() {
         let tick_commands = command_history.get(&new_tick.0).unwrap();
-        for (client, commands) in tick_commands {
-            if let Some(client_commands) = commands {
-                info!("RECEIVED COMMAND from client {} for tick {} {:#?}",
-                    client,
-                    new_tick.0,
-                    client_commands
-                );
+        for (_client, commands) in tick_commands.iter() {
+            for cmd in commands.iter() {
+                if let Some(move_cmd) = MoveCommand::from_reflect(cmd.as_partial_reflect()) {
+                    info!("received move command {}", move_cmd.0);
+                }
             }
         }
+        // Multiple tick packets may come in at the same time. 
+        // Keep this in mind when looping over these tick updates.
+        // For example you may need to manually tick the physics sim here.
         break;
     }
 }

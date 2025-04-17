@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 mod simulation;
 mod connections;
-mod commands;
+pub mod commands;
 
 use commands::LockstepCommandsPlugin;
 use connections::LockstepConnectionsPlugin;
@@ -32,8 +32,6 @@ pub mod prelude {
     pub use crate::commands::{
         ClientSendCommands,
         LockstepGameCommandBuffer,
-        LockstepCommand,
-        CommandTypeRegistry,
         LockstepClientCommands,
     };
 }
@@ -42,7 +40,6 @@ pub mod prelude {
 pub struct RepliconLockstepPlugin {
     pub simulation: SimulationSettings,
     pub server: ConnectionSettings,
-    pub commands: Vec<String>,
 }
 
 impl Plugin for RepliconLockstepPlugin {
@@ -50,7 +47,6 @@ impl Plugin for RepliconLockstepPlugin {
         app
             .insert_resource(self.simulation.clone())
             .insert_resource(self.server.clone())
-            .insert_resource(CommandTypeRegistry::new(self.commands.clone()))
             .add_plugins((
                 LockstepConnectionsPlugin,
                 LockstepSimulationPlugin,

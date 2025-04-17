@@ -3,6 +3,7 @@ use bevy_replicon::{prelude::*, shared::backend::connected_client::NetworkId};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 use serde::{Serialize, Deserialize};
+use crate::commands::ServerSendCommands;
 use crate::prelude::*;
 use crate::{commands::{LockstepGameCommandBuffer, LockstepGameCommandsReceived}, connections::ClientReady};
 
@@ -19,7 +20,6 @@ impl Plugin for LockstepSimulationPlugin {
             .add_systems(OnEnter(SimulationState::Starting), start_simulation)
             .add_observer(handle_sim_state_change)
             .add_observer(tick_client)
-            .add_server_trigger::<ServerSimulationTickReady>(Channel::Ordered)
             .add_server_trigger::<SetSimulationState>(Channel::Ordered)
             .add_client_trigger::<ClientReadyEvent>(Channel::Unordered)
             .add_systems(FixedPostUpdate, 
@@ -133,13 +133,6 @@ fn start_simulation(
     }
 }
 
-/// Internal trigger will send a SimulationTickEvent after storing commands
-#[derive(Event, Serialize, Deserialize)]
-pub(crate) struct ServerSimulationTickReady {
-    pub(crate) tick: SimTick,
-    pub(crate) commands: Option<LockstepClientCommands>,
-}
-
 /// Event triggered when the simulation ticks
 #[derive(Event, Serialize, Deserialize, Deref)]
 pub struct SimulationTickUpdate(pub SimTick);
@@ -151,7 +144,7 @@ pub struct SimulationTick(SimTick);
 static SIMULATION_ID_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 /// Unique Id for each simulation entity which can be commanded
-#[derive(Component, Deref, Serialize, Deserialize, Debug, Clone)]
+#[derive(Component, Deref, Serialize, Deserialize, Debug, Clone, Reflect)]
 pub struct SimulationId(u32);
 
 impl SimulationId {
@@ -162,14 +155,14 @@ impl SimulationId {
 
 /// Receives simulation tick events from the server.
 fn tick_client(
-    tick: Trigger<ServerSimulationTickReady>,
+    tick: Trigger<ServerSendCommands>,
     mut sim_tick: ResMut<SimulationTick>,
     mut command_history: ResMut<LockstepGameCommandBuffer>,
     mut sim_tick_event: EventWriter<SimulationTickUpdate>,
     server: Res<RepliconServer>,
 ) {
     if !server.is_running() {
-        command_history.insert(tick.tick, tick.commands.as_ref().unwrap().clone());
+        command_history.insert(tick.tick, tick.commands.clone());
         trace!("Received tick {}", tick.tick);
         if tick.tick == sim_tick.0 + 1 || sim_tick.0 == 0 {
             sim_tick.0 = tick.tick;
@@ -217,12 +210,12 @@ fn tick_server(
             *disconnect_timer = 0;
             let tick_commands = commands_buffer
                 .entry(sim_tick.0)
-                .or_insert(LockstepClientCommands::new());
+                .or_insert(LockstepClientCommands::default());
             commands.server_trigger(ToClients{
                 mode: SendMode::Broadcast,
-                event: ServerSimulationTickReady{
+                event: ServerSendCommands {
                     tick: sim_tick.0,
-                    commands: Some(tick_commands.clone()),
+                    commands: tick_commands.clone(),
                 }
             });
         } else {
