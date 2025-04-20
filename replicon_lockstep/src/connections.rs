@@ -56,15 +56,17 @@ impl Default for ConnectionSettings {
     }
 }
 
-/// A trigger that fires when the client should try to reconnect
+/// A trigger that fires when the local client should try to reconnect
 #[derive(Event)]
 pub struct ClientReconnect;
 
 /// A trigger that fires when the client has disconnected 
-/// If not in the Ending state or the None state it will first try throw a
-/// reconnect event and start a timer.  If the timer runs out this event fires.
+/// Will be triggered on both the local client and the server
+/// If on the local client, and not in the Ending state or
+/// the None state it will first try trigger a reconnect event
+/// and start a timer.  If the timer runs out this event fires.
 #[derive(Event)]
-pub struct ClientDisconnect;
+pub struct ClientDisconnect(pub ClientId);
 
 /// A trigger for the client to request the local client id from the server 
 #[derive(Event, Serialize, Deserialize)]
@@ -147,6 +149,7 @@ fn handle_local_client_disconnect(
     current_state: Res<State<SimulationState>>,
     mut timer: Query<(Entity, &mut ClientReconnectTimer)>,
     settings: Res<ConnectionSettings>,
+    local_client: Query<&NetworkId, With<LocalClient>>,
     time: Res<Time<Fixed>>,
 ) {
     match *current_state.get() {
@@ -157,7 +160,7 @@ fn handle_local_client_disconnect(
             let (entity, mut timer) = timer.single_mut();
             timer.tick(time.delta());
             if timer.elapsed() >= settings.reconnect_timer {
-                commands.trigger(ClientDisconnect);
+                commands.trigger(ClientDisconnect(local_client.single().get()));
                 state.set(SimulationState::None);
                 commands.entity(entity).despawn();
                 info!("Client disconnected");

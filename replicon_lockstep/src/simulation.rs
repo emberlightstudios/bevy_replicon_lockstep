@@ -3,9 +3,7 @@ use bevy_replicon::{prelude::*, shared::backend::connected_client::NetworkId};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 use serde::{Serialize, Deserialize};
-use crate::commands::ServerSendCommands;
-use crate::prelude::*;
-use crate::{commands::{LockstepGameCommandBuffer, LockstepGameCommandsReceived}, connections::ClientReady};
+use crate::{prelude::*, commands::{ServerSendCommands, LockstepGameCommandsReceived}};
 
 pub type SimTick = u32;
 
@@ -190,7 +188,7 @@ fn tick_server(
     clients: Query<&NetworkId>,
     stats: Query<&NetworkStats>,
     commands_received: Res<LockstepGameCommandsReceived>,
-    commands_buffer: ResMut<LockstepGameCommandBuffer>,
+    command_history: ResMut<LockstepGameCommandBuffer>,
     settings: Res<SimulationSettings>,
 ) {
     let mut tick_delay = 0u32;
@@ -217,7 +215,7 @@ fn tick_server(
             sim_tick.0 += 1;
             trace!("ticked to {}", sim_tick.0);
             *disconnect_timer = 0;
-            let tick_commands = commands_buffer.get(sim_tick.0);
+            let tick_commands = command_history.get(sim_tick.0);
             commands.server_trigger(ToClients{
                 mode: SendMode::Broadcast,
                 event: ServerSendCommands {
@@ -231,7 +229,11 @@ fn tick_server(
             if *disconnect_timer > settings.disconnect_tick_threshold {
                 *disconnect_timer = 0;
                 info!("Simulation paused due to missing client commands. ");
-                next_state.set(SimulationState::Paused)
+                next_state.set(SimulationState::Paused);
+                clients_for_tick
+                            .iter()
+                            .filter(|(c, _)| !clients_for_tick.contains_key(c))
+                            .for_each(|(&c, _)| commands.trigger(ClientDisconnect(c)));
             }
         }
     }

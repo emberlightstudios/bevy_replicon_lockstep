@@ -141,6 +141,9 @@ fn receive_commands_server(
     settings: Res<SimulationSettings>,
     stats: Query<&NetworkStats>,
 ) { 
+    // If this packet was delayed too long, we have to throw it out.  We don't have any rollback
+    if trigger.issued_tick < **current_tick { return }
+
     // In host server mode, the server can send events to itself
     // Server sent events use Entity::PLACEHOLDER
     // Instead I have set Host to have its own entity which has NetworkId=1
