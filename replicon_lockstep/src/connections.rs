@@ -18,9 +18,9 @@ impl Plugin for LockstepConnectionsPlugin {
             .add_observer(on_client_requested_id)
             .add_observer(on_received_local_client_id)
             .add_observer(on_client_ready)
-            .add_client_trigger::<ClientReadyEvent>(Channel::Unordered)
-            .add_client_trigger::<LocalClientIdRequestEvent>(Channel::Unordered)
             .add_server_trigger::<LocalClientIdResponseEvent>(Channel::Unordered)
+            .add_client_trigger::<LocalClientIdRequestEvent>(Channel::Unordered)
+            .add_client_trigger::<ClientReadyEvent>(Channel::Unordered)
             .add_systems(FixedPreUpdate, (
                 check_all_clients_ready
                     .run_if(in_state(SimulationState::Setup).and(server_running)),

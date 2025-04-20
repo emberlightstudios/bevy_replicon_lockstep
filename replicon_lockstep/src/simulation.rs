@@ -22,6 +22,7 @@ impl Plugin for LockstepSimulationPlugin {
             .add_observer(tick_client)
             .add_server_trigger::<SetSimulationState>(Channel::Ordered)
             .add_client_trigger::<ClientReadyEvent>(Channel::Unordered)
+            .register_type::<SimulationId>()
             .add_systems(FixedPostUpdate, 
                 tick_server
                     .run_if(server_running.and(in_state(SimulationState::Running)))
@@ -141,14 +142,21 @@ pub struct SimulationTickUpdate(pub SimTick);
 #[derive(Resource, Deref, DerefMut, Default)]
 pub struct SimulationTick(SimTick);
 
-static SIMULATION_ID_COUNTER: AtomicU32 = AtomicU32::new(0);
+/// An atomic counter for incrementing the simulation id on each assignment
+static SIMULATION_ID_COUNTER: AtomicU32 = AtomicU32::new(1);
 
-/// Unique Id for each simulation entity which can be commanded
+/// Unique Id for each entity in the simulation 
 #[derive(Component, Deref, Serialize, Deserialize, Debug, Clone, Reflect)]
 pub struct SimulationId(u32);
 
 impl SimulationId {
-    fn new() -> Self {
+    /// If your command has a payload with a SimulationId field
+    /// Clients can send this value. Before the server broadcasts it
+    /// this will be changed to a proper value
+    pub const PLACEHOLDER: SimulationId = SimulationId(0);
+
+    pub fn new() -> Self {
+        // What happens if someone manages to reach u32::MAX ?
         Self(SIMULATION_ID_COUNTER.fetch_add(1, Ordering::Relaxed))
     }
 }
@@ -162,7 +170,7 @@ fn tick_client(
     server: Res<RepliconServer>,
 ) {
     if !server.is_running() {
-        command_history.insert(tick.tick, tick.commands.clone());
+        command_history.resize(tick.tick + 1, tick.commands.clone());
         trace!("Received tick {}", tick.tick);
         if tick.tick == sim_tick.0 + 1 || sim_tick.0 == 0 {
             sim_tick.0 = tick.tick;
@@ -182,7 +190,7 @@ fn tick_server(
     clients: Query<&NetworkId>,
     stats: Query<&NetworkStats>,
     commands_received: Res<LockstepGameCommandsReceived>,
-    mut commands_buffer: ResMut<LockstepGameCommandBuffer>,
+    commands_buffer: ResMut<LockstepGameCommandBuffer>,
     settings: Res<SimulationSettings>,
 ) {
     let mut tick_delay = 0u32;
@@ -203,19 +211,18 @@ fn tick_server(
     let mut tick_to_check = sim_tick.0;
     if tick_delay < tick_to_check { tick_to_check -= tick_delay }
 
-    if let Some(clients_for_tick) = commands_received.get(&tick_to_check) {
+    if let Some(clients_for_tick) = commands_received.get(tick_to_check) {
+        trace!("Checking clients ready for tick {} {:#?}", sim_tick.0, clients_for_tick.keys());
         if clients_for_tick.iter().len() == clients.iter().len() {
             sim_tick.0 += 1;
             trace!("ticked to {}", sim_tick.0);
             *disconnect_timer = 0;
-            let tick_commands = commands_buffer
-                .entry(sim_tick.0)
-                .or_insert(LockstepClientCommands::default());
+            let tick_commands = commands_buffer.get(sim_tick.0);
             commands.server_trigger(ToClients{
                 mode: SendMode::Broadcast,
                 event: ServerSendCommands {
                     tick: sim_tick.0,
-                    commands: tick_commands.clone(),
+                    commands: tick_commands.unwrap_or(&LockstepClientCommands::default()).clone(),
                 }
             });
         } else {

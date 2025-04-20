@@ -7,8 +7,8 @@ use bevy::prelude::*;
 use crate::prelude::SimulationId;
 
 
-#[derive(Reflect, Clone, Debug)]
-pub struct SelectCommand(pub Vec<SimulationId>);
+#[derive(Reflect, Clone, Debug, Deref)]
+pub struct ServerSpawn(SimulationId);
 
 #[derive(Reflect, Clone, Debug)]
 pub struct MoveCommand(pub Vec3);

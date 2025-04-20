@@ -1,8 +1,9 @@
-use bevy::{prelude::*, reflect::serde::{ReflectDeserializer, ReflectSerializer}, utils::hashbrown::HashMap};
+use std::collections::BTreeMap;
+use bevy::{prelude::*, reflect::serde::{ReflectDeserializer, ReflectSerializer}};
 use bevy_replicon::{
     bytes::Bytes,
     postcard::{
-        self, Deserializer, Error, Serializer
+        self, Deserializer, Serializer
     },
     shared::{
         event::ctx::{ClientReceiveCtx, ClientSendCtx, ServerReceiveCtx, ServerSendCtx},
@@ -84,7 +85,7 @@ pub(super) fn deserialize_server_send_commands(
 
     // Deserialize the number of commands
     let num_clients = u8::deserialize(&mut deserializer)?;
-    let mut client_commands: HashMap<u64, Vec<_>> = HashMap::<u64, Vec<_>>::with_capacity(num_clients.into());
+    let mut client_commands: BTreeMap<u64, Vec<_>> = BTreeMap::<u64, Vec<_>>::new();
     for _ in 0..num_clients {
         let client_id = u64::deserialize(&mut deserializer)?;
         let num_commands = u16::deserialize(&mut deserializer)?;
