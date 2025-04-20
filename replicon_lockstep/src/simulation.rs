@@ -212,7 +212,7 @@ fn tick_server(
     if tick_delay < tick_to_check { tick_to_check -= tick_delay }
 
     if let Some(clients_for_tick) = commands_received.get(tick_to_check) {
-        trace!("Checking clients ready for tick {} {:#?}", sim_tick.0, clients_for_tick.keys());
+        trace!("Checking clients ready for tick {} {:#?}", tick_to_check, clients_for_tick.keys());
         if clients_for_tick.iter().len() == clients.iter().len() {
             sim_tick.0 += 1;
             trace!("ticked to {}", sim_tick.0);

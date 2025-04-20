@@ -151,10 +151,12 @@ fn receive_commands_server(
 
     // Track received commands always, even when empty, for managing connections
     let tick = trigger.event().issued_tick;
-    received.resize(tick + 1, LockstepClientCommands::default());
+    if tick >= received.len() as u32 {
+        received.resize(tick + 1, LockstepClientCommands::default());
+    }
     received[tick as usize].insert(client_id,
         client_commands.iter().map(|x| x.clone_value()).collect());
-    trace!("received on tick {} {:#?}", tick, received[tick as usize].keys());
+    trace!("data for tick {} put in received cache {:#?}", tick, received[tick as usize].keys());
 
     // But only send valid commands back to clients
     if num_commands > 0 {
@@ -164,7 +166,9 @@ fn receive_commands_server(
             .map_or(1, |s: &NetworkStats| ((s.rtt / 2.0) / settings.tick_timestep.as_secs_f64()).ceil() as SimTick);
         let execution_tick = **current_tick + tick_delay + settings.base_input_tick_delay as SimTick;
         trace!("storing commands for execution tick {} for client {}", execution_tick, client_id);
-        history.resize(execution_tick + 1, LockstepClientCommands::default());
+        if execution_tick >= history.len() as u32 {
+            history.resize(execution_tick + 1, LockstepClientCommands::default());
+        }
         history[execution_tick as usize].insert(client_id,
             client_commands.iter().map(|x| x.clone_value()).collect());
     }
