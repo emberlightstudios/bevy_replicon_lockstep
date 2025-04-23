@@ -210,7 +210,7 @@ fn tick_server(
     clients: Query<&NetworkId>,
     stats: Query<&NetworkStats>,
     commands_received: Res<LockstepGameCommandsReceived>,
-    command_history: ResMut<LockstepGameCommandBuffer>,
+    mut command_history: ResMut<LockstepGameCommandBuffer>,
     settings: Res<SimulationSettings>,
 ) {
     let mut tick_delay = 0u32;
@@ -245,7 +245,13 @@ fn tick_server(
                 mode: SendMode::Broadcast,
                 event: ServerSendCommands {
                     tick: sim_tick.0,
-                    commands: tick_commands.unwrap_or(&LockstepClientCommands::default()).clone(),
+                    commands: tick_commands.cloned().unwrap_or_else(|| {
+                        let default = LockstepClientCommands::default();
+                        if command_history.len() <= sim_tick.0 as usize {
+                            command_history.resize(sim_tick.0, default.clone());
+                        }
+                        default
+                    }),
                 }
             });
         } else {

@@ -264,7 +264,6 @@ fn process_tick_commands(
                 // Always use new when spawning a new SimulationId to the server
                 // Also make sure the order of spawning is identical for determinism
                 let sim_id = SimulationId::new();
-                info!("{}", spawn_cmd.position);
                 spawn_unit(
                     spawn_cmd.unit_type,
                     Transform::default().with_translation(spawn_cmd.position),
