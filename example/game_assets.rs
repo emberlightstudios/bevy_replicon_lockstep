@@ -1,5 +1,6 @@
-use bevy::{prelude::*, utils::hashbrown::HashMap};
+use bevy::{math::VectorSpace, prelude::*, utils::hashbrown::HashMap};
 use bevy_replicon_lockstep::prelude::SimulationId;
+use avian3d::prelude::*;
 
 #[derive(Eq, PartialEq, Hash, Reflect)]
 pub enum Unit {
@@ -12,15 +13,20 @@ pub fn spawn_unit(
     id: SimulationId,
     commands: &mut Commands,
     assets: &Res<UnitAssets>,
-) {
+) -> Entity {
     match unit {
         Unit::Capsule => {
-            commands.spawn((
+            return commands.spawn((
                 Mesh3d(assets.meshes.get(&Unit::Capsule).unwrap().clone()),
                 MeshMaterial3d(assets.materials.get(&Unit::Capsule).unwrap().clone()),
                 transform.clone(),
                 id,
-            ));
+                RigidBody::Dynamic,
+                Collider::capsule(0.5, 1.),
+                LockedAxes::new().lock_rotation_x().lock_rotation_z(),
+                Friction::new(0.1),
+                ExternalForce::new(Vec3::ZERO).with_persistence(false),
+            )).id();
         }
     }
 }
@@ -32,9 +38,9 @@ pub struct UnitAssets {
 }
 
 pub fn setup_environment(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
 ) {
     let floor_material = materials.add(Color::linear_rgb(0.3, 0.7, 0.3));
     let floor_mesh = meshes.add(Plane3d::default().mesh().size(50.0, 50.0));
@@ -55,6 +61,9 @@ pub fn setup_environment(
         Mesh3d(floor_mesh),
         MeshMaterial3d(floor_material),
         PickingBehavior::IGNORE,
+        RigidBody::Static,
+        Collider::cuboid(50., 0.01, 50.0),
+        Friction::new(0.1),
     ));
 
     // Light

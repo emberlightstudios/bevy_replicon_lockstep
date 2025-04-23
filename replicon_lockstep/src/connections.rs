@@ -56,23 +56,21 @@ impl Default for ConnectionSettings {
     }
 }
 
-/// A trigger that fires when the local client should try to reconnect
+/// A trigger that triggers when the local client should try to reconnect. Then
+/// a system will start a timer.  If the timer runs out, [`ClientDisconnect`] triggers.
 #[derive(Event)]
 pub struct ClientReconnect;
 
-/// A trigger that fires when the client has disconnected 
-/// Will be triggered on both the local client and the server
-/// If on the local client, and not in the Ending state or
-/// the None state it will first try trigger a reconnect event
-/// and start a timer.  If the timer runs out this event fires.
+/// A trigger that fires when the client has disconnected. 
+/// It will be triggered on both the local client and the server.
 #[derive(Event)]
 pub struct ClientDisconnect(pub ClientId);
 
-/// A trigger for the client to request the local client id from the server 
+/// A trigger for the client to request the local client id from the server.
 #[derive(Event, Serialize, Deserialize)]
 struct LocalClientIdRequestEvent;
 
-/// A trigger for the server to send the local client id to a connected client
+/// A trigger for the server to send the local client id to a connected client.
 #[derive(Event, Serialize, Deserialize, Deref)]
 struct LocalClientIdResponseEvent(NetworkId);
 
@@ -80,9 +78,10 @@ struct LocalClientIdResponseEvent(NetworkId);
 #[derive(Component)]
 pub struct LocalClient;
 
-/// Marker Component to signal client has loaded and is ready to start the game
+/// Replicated marker component.  Trigger [`ClientReadyEvent`] on a client
+/// that is loaded and ready to start the game.
 #[derive(Component, Serialize, Deserialize)]
-pub struct ClientReady;
+pub(crate) struct ClientReady;
 
 /// Event sent by clients to tell server to mark client as ready
 #[derive(Event, Serialize, Deserialize)]
@@ -209,7 +208,9 @@ fn on_client_ready (
     ready: Trigger<FromClient<ClientReadyEvent>>,
     host: Query<Entity, With<LocalClient>>,
     mut commands: Commands,
+    state: Res<State<SimulationState>>,
 ) {
+    if *state.get() != SimulationState::Setup { return }
     if ready.client_entity == Entity::PLACEHOLDER {
         // This is the host server triggering the event
         if let Ok(host_entity) = host.get_single() {

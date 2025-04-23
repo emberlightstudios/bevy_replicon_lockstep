@@ -49,7 +49,6 @@ pub(super) fn deserialize_client_send_commands(
         let payload = reflect_deserializer.deserialize(&mut deserializer)?
             .as_partial_reflect()
             .clone_value();
-
         commands.push(payload);
     }
     let issued_tick = SimTick::deserialize(&mut deserializer)?;
@@ -99,6 +98,6 @@ pub(super) fn deserialize_server_send_commands(
         }
         client_commands.insert(client_id, commands);
     }
-    let tick: u32 = SimTick::deserialize(&mut deserializer)?;
+    let tick: SimTick = SimTick::deserialize(&mut deserializer)?;
     Ok(ServerSendCommands { commands: LockstepClientCommands(client_commands), tick })
 }

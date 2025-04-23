@@ -5,7 +5,6 @@ use bevy_replicon::{prelude::*, shared::backend::connected_client::NetworkId};
 use crate::prelude::*;
 
 mod serialization;
-pub mod types;
 
 pub(crate) struct LockstepCommandsPlugin;
 
@@ -141,16 +140,13 @@ fn receive_commands_server(
     settings: Res<SimulationSettings>,
     stats: Query<&NetworkStats>,
 ) { 
-    // If this packet was delayed too long, we have to throw it out.  We don't have any rollback
-    if trigger.issued_tick < **current_tick { return }
-
     // In host server mode, the server can send events to itself
     // Server sent events use Entity::PLACEHOLDER
     // Instead I have set Host to have its own entity which has NetworkId=1
     let client_id: u64 = clients.get(trigger.client_entity).map_or(1, |id: &NetworkId| id.get());
     let client_commands: &Vec<Box<dyn PartialReflect>> = &trigger.event().commands;
     let num_commands = client_commands.iter().len();
-    trace!("server received commands from client {} for tick {}", client_id, trigger.event().issued_tick);
+    trace!("server received commands from client {} issued on client tick {}", client_id, trigger.event().issued_tick);
 
     // Track received commands always, even when empty, for managing connections
     let tick = trigger.event().issued_tick;
@@ -159,7 +155,6 @@ fn receive_commands_server(
     }
     received[tick as usize].insert(client_id,
         client_commands.iter().map(|x| x.clone_value()).collect());
-    trace!("data for tick {} put in received cache {:#?}", tick, received[tick as usize].keys());
 
     // But only send valid commands back to clients
     if num_commands > 0 {

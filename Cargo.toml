@@ -9,7 +9,7 @@ bevy_replicon = "0.32.0"
 bevy_replicon_renet = "0.9.0"
 bevy_replicon_lockstep = { path = './replicon_lockstep' }
 serde = "1.0.219"
-avian3d = "0.2.1"
+avian3d = { version = "0.2.1", default-features = false, features = ["3d", "f32", "parry-f32", "debug-plugin", "enhanced-determinism", "parallel"] }
 erased-serde = "0.4.6"
 bincode = { version = "1.3" }
 

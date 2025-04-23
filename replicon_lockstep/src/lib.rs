@@ -14,10 +14,11 @@ pub mod prelude {
     pub use crate::simulation::{
         SimulationSettings,
         SimulationState,
-        SimulationTick,
         SimTick,
+        SimulationTick,
         SimulationTickUpdate,
         SimulationId,
+        SimulationIdEntityMap,
     };
     pub use crate::connections::{
         LocalClient,
@@ -25,7 +26,6 @@ pub mod prelude {
         ClientReconnect,
         ClientDisconnect,
         ClientReadyEvent,
-        ClientReady,
         ServerMode,
         ConnectionSettings,
     };

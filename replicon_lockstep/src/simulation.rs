@@ -1,9 +1,10 @@
 use bevy::prelude::*;
+use bevy::utils::hashbrown::HashMap;
 use bevy_replicon::{prelude::*, shared::backend::connected_client::NetworkId};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 use serde::{Serialize, Deserialize};
-use crate::{prelude::*, commands::{ServerSendCommands, LockstepGameCommandsReceived}};
+use crate::{prelude::*, commands::{ServerSendCommands, LockstepGameCommandsReceived}, connections::ClientReady};
 
 pub type SimTick = u32;
 
@@ -16,6 +17,8 @@ impl Plugin for LockstepSimulationPlugin {
             .add_event::<SimulationTickUpdate>()
             .add_systems(OnEnter(SimulationState::Setup), setup_simulation)
             .add_systems(OnEnter(SimulationState::Starting), start_simulation)
+            .add_systems(Update, cache_ids)
+            .init_resource::<SimulationIdEntityMap>()
             .add_observer(handle_sim_state_change)
             .add_observer(tick_client)
             .add_server_trigger::<SetSimulationState>(Channel::Ordered)
@@ -110,10 +113,13 @@ fn setup_simulation(
     mut commands: Commands,
     mut command_history: ResMut<LockstepGameCommandBuffer>,
     mut commands_received: ResMut<LockstepGameCommandsReceived>,
+    mut id_entity_map: ResMut<SimulationIdEntityMap>,
 ) {
     commands.insert_resource(SimulationTick(0));
     command_history.clear();
     commands_received.clear();
+    id_entity_map.clear();
+    SIMULATION_ID_COUNTER.store(1, Ordering::SeqCst);
 }
 
 fn start_simulation(
@@ -136,7 +142,10 @@ fn start_simulation(
 #[derive(Event, Serialize, Deserialize, Deref)]
 pub struct SimulationTickUpdate(pub SimTick);
 
-/// The current simulation tick
+/// The current simulation tick. Several ticks may arrive at once 
+/// without sufficient time to process them all.  This is only used to record
+/// commands received from the server.  Users should implement their own 
+/// logic to track which commands need to be processed.  
 #[derive(Resource, Deref, DerefMut, Default)]
 pub struct SimulationTick(SimTick);
 
@@ -144,7 +153,7 @@ pub struct SimulationTick(SimTick);
 static SIMULATION_ID_COUNTER: AtomicU32 = AtomicU32::new(1);
 
 /// Unique Id for each entity in the simulation 
-#[derive(Component, Deref, Serialize, Deserialize, Debug, Clone, Reflect)]
+#[derive(Component, Deref, Serialize, Deserialize, Debug, Clone, Copy, Reflect, Eq, PartialEq, Hash)]
 pub struct SimulationId(u32);
 
 impl SimulationId {
@@ -157,6 +166,19 @@ impl SimulationId {
         // What happens if someone manages to reach u32::MAX ?
         Self(SIMULATION_ID_COUNTER.fetch_add(1, Ordering::Relaxed))
     }
+}
+
+/// Resource to map SimulationIds to Entities for quick look-up of entities
+#[derive(Resource, Deref, DerefMut, Default)]
+pub struct SimulationIdEntityMap(HashMap<SimulationId, Entity>);
+
+fn cache_ids(
+    new_ids: Query<(Entity, &SimulationId), Added<SimulationId>>,
+    mut id_map: ResMut<SimulationIdEntityMap>,
+) {
+    new_ids.iter().for_each(|(entity, &id)| {
+        id_map.insert(id, entity);
+    })
 }
 
 /// Receives simulation tick events from the server.
@@ -207,10 +229,13 @@ fn tick_server(
                 .rtt / 2.0).ceil() as u32 + settings.connection_check_tick_delay;
     }
     let mut tick_to_check = sim_tick.0;
-    if tick_delay < tick_to_check { tick_to_check -= tick_delay }
+    if tick_delay > tick_to_check {
+        tick_to_check = 0
+    } else {
+        tick_to_check -= tick_delay
+    }
 
     if let Some(clients_for_tick) = commands_received.get(tick_to_check) {
-        trace!("Checking clients ready for tick {} {:#?}", tick_to_check, clients_for_tick.keys());
         if clients_for_tick.iter().len() == clients.iter().len() {
             sim_tick.0 += 1;
             trace!("ticked to {}", sim_tick.0);
@@ -228,7 +253,7 @@ fn tick_server(
             *disconnect_timer += 1;
             if *disconnect_timer > settings.disconnect_tick_threshold {
                 *disconnect_timer = 0;
-                info!("Simulation paused due to missing client commands. ");
+                info!("Simulation paused due to missing client commands.");
                 next_state.set(SimulationState::Paused);
                 clients_for_tick
                             .iter()
