@@ -9,7 +9,7 @@ use avian3d::prelude::*;
 mod connection;
 mod game_assets;
 
-const SIM_TICK_RATE: Duration = Duration::from_millis(33);
+const SIM_TICK_INTERVAL: Duration = Duration::from_millis(33);
 
 /// Command types for the simulation.  Must derive Reflect and be registered
  
@@ -75,7 +75,7 @@ fn main() {
         RepliconLockstepPlugin {
             simulation: SimulationSettings {
                 // ~30 ticks per second
-                tick_timestep: SIM_TICK_RATE,
+                tick_timestep: SIM_TICK_INTERVAL,
                 num_players: 2,
                 ..default()
             },
@@ -138,9 +138,9 @@ fn main() {
 
                 // handle commands from server for all clients
                 (
-                    update_last_tick,
                     process_tick_commands,
                     step_physics,
+                    update_last_tick,
                 ).run_if(new_tick_ready).chain(),
 
             ).run_if(in_state(SimulationState::Running))
@@ -241,11 +241,7 @@ fn send_commands(
 // The next 3 systems will all be run in the order they are defined below.
 // They will be delayed by a few ticks to account for client ping.  This is the downside
 // of the lockstep architecture.  The upside is it scales better than other architectures
-// when you have massive numbers of entities.
-
-fn update_last_tick(mut last_tick: ResMut<LastProcessedTick>) {
-    last_tick.0 += 1;
-}
+// when you have massive numbers of entities that need to stay in sync.
 
 fn process_tick_commands(
     mut commands: Commands,
@@ -256,7 +252,7 @@ fn process_tick_commands(
     mut forces: Query<&mut ExternalForce>,
     last_tick: Res<LastProcessedTick>,
 ) {
-    let Some(tick_commands) = command_history.get(last_tick.0) else { return };
+    let Some(tick_commands) = command_history.get(last_tick.0 + 1) else { return };
     for (_client, commands_for_client) in tick_commands.iter() {
         for cmd in commands_for_client.iter() {
             // Is it a SpawnUnit command ?
@@ -289,6 +285,10 @@ fn step_physics(
 ) {
     world
         .resource_mut::<Time<Physics>>()
-        .advance_by(SIM_TICK_RATE);
+        .advance_by(SIM_TICK_INTERVAL);
     world.run_schedule(PhysicsSchedule);
+}
+
+fn update_last_tick(mut last_tick: ResMut<LastProcessedTick>) {
+    last_tick.0 += 1;
 }
