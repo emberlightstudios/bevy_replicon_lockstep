@@ -6,7 +6,7 @@ The idea is that netcode can be implemented by only sending input streams betwee
 1. There is an inherent lag based on the round trip time of a cient.  Since we are not doing client-side prediction it can be noticeable and will not be appropriate for fast paced games, such as first person shooters.
 2. Clients must be able to run their local simulations deterministically so that each client's game state stays in sync with all the others.  This is not always easy to do.
 
-Unlike tradition p2p deterministic lockstep solutions, this crate uses the client-server model.  This has an advantage in that the input delay can be set on a per client basis based on the ping, rather than everyone's experience being slowed down to match the client with the highest ping.
+Unlike traditional p2p deterministic lockstep solutions, this crate uses the client-server model.  This has an advantage in that the input delay can be set on a per client basis based on the ping, rather than everyone's experience being slowed down to match the client with the highest ping.
 
 My original motivation was to try to use avian3d as a physics layer inside the simulation.  While I am able to get forces to work across clients, unfortunately this appears to not be deterministic, even with enhanced-determinism enabled for avian.  Writing my own physics layer seems ouside the scope of my time and abilities, so I may be abandoning the project for the foreseeable future.  
 
