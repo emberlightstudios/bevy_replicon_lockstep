@@ -4,7 +4,7 @@ This repository is an attempt at implementing a lockstep network architecture fo
 The idea is that netcode can be implemented by only sending input streams between clients rather than other modern netcode solutions which often involve running multiple different time streams for different entities, predicting the future state, and reconciling divergences with past states from the authoritative server.  Instead if we can ensure all clients can run the game in a deterministic manner, then we can replicate commands only and this can scale extremely well with large numbers of entities, e.g. real-time strategy games.  The downside of this approach is two-fold:
 
 1. There is an inherent lag based on the round trip time of a cient.  Since we are not doing client-side prediction it can be noticeable and will not be appropriate for fast paced games, such as first person shooters.
-2. Clients must be able to simulate the simulation deterministically so that each client's game state stays in sync with all the others.  This is not always easy to do.
+2. Clients must be able to run their local simulations deterministically so that each client's game state stays in sync with all the others.  This is not always easy to do.
 
 Unlike tradition p2p deterministic lockstep solutions, this crate uses the client-server model.  This has an advantage in that the input delay can be set on a per client basis based on the ping, rather than everyone's experience being slowed down to match the client with the highest ping.
 
