@@ -55,7 +55,7 @@ pub struct SimulationSettings {
     /// This is also to account for packet jitter, but instead of delaying
     /// input execution, we are delaying disconnection signals.
     pub connection_check_tick_delay: u32,
-    /// The number of tick equivalent timestaps we will wait for input
+    /// The number of tick equivalent timesteps we will wait for input
     /// before declaring a client is disconnected.  The simulation will be
     /// paused while waiting.
     pub disconnect_tick_threshold: u8,
@@ -157,11 +157,10 @@ static SIMULATION_ID_COUNTER: AtomicU32 = AtomicU32::new(1);
 pub struct SimulationId(u32);
 
 impl SimulationId {
-    /// If your command has a payload with a SimulationId field
-    /// Clients can send this value. Before the server broadcasts it
-    /// this will be changed to a proper value
+    // Use this when sending commands from clients
     pub const PLACEHOLDER: SimulationId = SimulationId(0);
 
+    // Use this when implementing the commands after receiving from server
     pub fn new() -> Self {
         // What happens if someone manages to reach u32::MAX ?
         Self(SIMULATION_ID_COUNTER.fetch_add(1, Ordering::Relaxed))

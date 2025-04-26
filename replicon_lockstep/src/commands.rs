@@ -129,8 +129,7 @@ fn send_empty_commands_to_server_on_tick(
 }
 
 /// When the server receives commmands from a client it should
-///  - store the commands in the command history
-///  x broadcast them to all other clients  (moved commands into tick event)
+///  store the commands in the command history
 fn receive_commands_server(
     trigger: Trigger<FromClient<ClientSendCommands>>,
     mut received: ResMut<LockstepGameCommandsReceived>,
